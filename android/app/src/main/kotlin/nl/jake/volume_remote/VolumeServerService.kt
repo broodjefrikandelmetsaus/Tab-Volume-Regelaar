@@ -36,6 +36,8 @@ class VolumeServerService : android.app.Service() {
     private var server: ServerSocket? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val cloudPollBusy = AtomicBoolean(false)
+    private val cloudPollAgain = AtomicBoolean(false)
+    @Volatile private var realtimeSocket: SupabaseRealtimeSocket? = null
     private val channelId = "volume_receiver"
     private val kidsChannelId = "volume_remote_actions"
     private var standbyWakeLock: PowerManager.WakeLock? = null
@@ -55,6 +57,7 @@ class VolumeServerService : android.app.Service() {
         if (isStandby()) {
             setStandbyMode(true, schedule = false)
         }
+        startRealtimeIfConfigured()
         scheduleCloudPolling(2500)
     }
 
@@ -174,25 +177,44 @@ class VolumeServerService : android.app.Service() {
 
     private fun setReceiverUiForeground(foreground: Boolean) {
         receiverUiForeground = foreground
-        if (foreground) {
-            if (isStandby()) {
-                val keyguard = getSystemService(android.app.KeyguardManager::class.java)
-                if (!keyguard.isKeyguardLocked) setStandbyMode(false, schedule = false)
-            }
-            mainHandler.removeCallbacks(cloudPollRunnable)
-        } else {
-            scheduleCloudPolling(1000)
+        if (foreground && isStandby()) {
+            val keyguard = getSystemService(android.app.KeyguardManager::class.java)
+            if (!keyguard.isKeyguardLocked) setStandbyMode(false, schedule = false)
         }
+        // The native service owns the live socket in both foreground and standby.
+        scheduleCloudPolling(if (foreground) 500L else 1000L)
+    }
+
+    private fun startRealtimeIfConfigured() {
+        val credentials = CloudCredentialStore.read(this) ?: return
+        if (realtimeSocket == null) {
+            realtimeSocket = SupabaseRealtimeSocket(
+                onCommandAvailable = { mainHandler.post { scheduleCloudPolling(100L) } },
+                onConnectionChanged = { connected ->
+                    if (!connected) mainHandler.post { scheduleCloudPolling(1500L) }
+                }
+            )
+        }
+        realtimeSocket?.connect(credentials.first)
+    }
+
+    private fun onCloudCredentialsUpdated() {
+        startRealtimeIfConfigured()
+        scheduleCloudPolling(150L)
     }
 
     private fun scheduleCloudPolling(delayMs: Long) {
-        if (!running || receiverUiForeground) return
+        if (!running) return
         mainHandler.removeCallbacks(cloudPollRunnable)
         mainHandler.postDelayed(cloudPollRunnable, delayMs)
     }
 
     private fun pollCloudInBackground() {
-        if (!running || receiverUiForeground || !cloudPollBusy.compareAndSet(false, true)) return
+        if (!running) return
+        if (!cloudPollBusy.compareAndSet(false, true)) {
+            cloudPollAgain.set(true)
+            return
+        }
 
         Thread {
             var pollWakeLock: PowerManager.WakeLock? = null
@@ -222,6 +244,7 @@ class VolumeServerService : android.app.Service() {
                             .put("status", status)
                     )
                     val commands = response.optJSONArray("commands") ?: JSONArray()
+                    var statusNeedsBroadcast = false
                     for (index in 0 until commands.length()) {
                         val command = commands.optJSONObject(index) ?: continue
                         val commandId = command.optLong("id", -1L)
@@ -253,9 +276,19 @@ class VolumeServerService : android.app.Service() {
                                     .put("secret", credentials.second)
                                     .put("commandId", commandId)
                             )
+                            statusNeedsBroadcast = true
                         }
                         // Don't process more commands after turning the display off.
                         if (action == "lock") break
+                    }
+                    if (statusNeedsBroadcast && !isStandby()) {
+                        postCloud(
+                            JSONObject()
+                                .put("action", "heartbeat")
+                                .put("deviceId", credentials.first)
+                                .put("secret", credentials.second)
+                                .put("status", statusPayload())
+                        )
                     }
                 }
             } catch (_: Exception) {
@@ -265,7 +298,13 @@ class VolumeServerService : android.app.Service() {
                     pollWakeLock?.let { if (it.isHeld) it.release() }
                 } catch (_: Exception) { }
                 cloudPollBusy.set(false)
-                val delay = if (isStandby()) 45000L else 60000L
+                val delay = if (cloudPollAgain.getAndSet(false)) {
+                    100L
+                } else if (realtimeSocket?.isConnected == true) {
+                    if (isStandby()) 30000L else 12000L
+                } else {
+                    8000L
+                }
                 scheduleCloudPolling(delay)
             }
         }.start()
@@ -456,6 +495,8 @@ class VolumeServerService : android.app.Service() {
         running = false
         liveInstance = null
         mainHandler.removeCallbacks(cloudPollRunnable)
+        realtimeSocket?.close()
+        realtimeSocket = null
         releaseStandbyLocks()
         try { server?.close() } catch (_: Exception) { }
         super.onDestroy()
@@ -473,6 +514,10 @@ class VolumeServerService : android.app.Service() {
         fun setReceiverUiForeground(foreground: Boolean) {
             desiredUiForeground = foreground
             liveInstance?.setReceiverUiForeground(foreground)
+        }
+
+        fun onCloudCredentialsUpdated() {
+            liveInstance?.onCloudCredentialsUpdated()
         }
 
         fun currentPin(context: Context): String {
@@ -507,3 +552,5 @@ class VolumeServerService : android.app.Service() {
         }
     }
 }
+
+[executed on device: PC-van-Jake (1997e53f-651c-4a6a-959d-b2acccb4b133)]
