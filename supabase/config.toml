@@ -1,0 +1,2 @@
+[functions.volume-remote]
+verify_jwt = false
