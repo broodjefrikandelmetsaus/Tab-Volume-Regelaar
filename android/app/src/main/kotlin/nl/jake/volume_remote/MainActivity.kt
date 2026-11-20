@@ -209,7 +209,9 @@ class MainActivity : FlutterActivity() {
                         "batteryOptimizationIgnored" to getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName),
                         "wifiPermissionGranted" to (Build.VERSION.SDK_INT < 33 ||
                             checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED),
-                        "youtubeKidsInstalled" to (packageManager.getLaunchIntentForPackage("com.google.android.apps.youtube.kids") != null)
+                        "youtubeKidsInstalled" to (packageManager.getLaunchIntentForPackage("com.google.android.apps.youtube.kids") != null),
+                        "canOpenKidsInBackground" to (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)),
+                        "touchLocked" to VolumeServerService.isTouchLocked(this)
                     )
                 )
                 "requestBrightnessPermission" -> {
@@ -264,6 +266,13 @@ class MainActivity : FlutterActivity() {
                     addWifiSuggestion(ssid, password, result)
                 }
                 "getYouTubeKidsIcon" -> result.success(getKidsIcon())
+                "requestYouTubeKidsBackgroundPermission" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                        startActivity(intent)
+                    }
+                    result.success(true)
+                }
                 "openYouTubeKids" -> {
                     try { openKids(); result.success(true) }
                     catch (e: Exception) { result.error("OPEN_KIDS_FAILED", e.message, null) }
@@ -277,5 +286,3 @@ class MainActivity : FlutterActivity() {
         }
     }
 }
-
-[executed on device: PC-van-Jake (1997e53f-651c-4a6a-959d-b2acccb4b133)]
