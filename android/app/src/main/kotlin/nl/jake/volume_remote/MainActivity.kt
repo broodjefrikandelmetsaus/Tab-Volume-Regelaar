@@ -16,7 +16,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
 import android.util.Base64
@@ -206,7 +205,6 @@ class MainActivity : FlutterActivity() {
                         "lockAdminActive" to getSystemService(DevicePolicyManager::class.java).isAdminActive(adminComponent),
                         "standby" to getSharedPreferences("volume_remote", MODE_PRIVATE).getBoolean("standby", false),
                         "secureLockScreen" to getSystemService(KeyguardManager::class.java).isDeviceSecure,
-                        "batteryOptimizationIgnored" to getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName),
                         "wifiPermissionGranted" to (Build.VERSION.SDK_INT < 33 ||
                             checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED),
                         "youtubeKidsInstalled" to (packageManager.getLaunchIntentForPackage("com.google.android.apps.youtube.kids") != null),
@@ -244,17 +242,6 @@ class MainActivity : FlutterActivity() {
                     startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
                     result.success(true)
                 }
-                "requestBatteryOptimizationExemption" -> {
-                    val power = getSystemService(PowerManager::class.java)
-                    if (!power.isIgnoringBatteryOptimizations(packageName)) {
-                        val intent = Intent(
-                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                            Uri.parse("package:$packageName")
-                        )
-                        startActivity(intent)
-                    }
-                    result.success(true)
-                }
                 "requestWifiPermission" -> {
                     requestWifiPermission()
                     result.success(true)
@@ -286,3 +273,5 @@ class MainActivity : FlutterActivity() {
         }
     }
 }
+
+[executed on device: PC-van-Jake (1997e53f-651c-4a6a-959d-b2acccb4b133)]
