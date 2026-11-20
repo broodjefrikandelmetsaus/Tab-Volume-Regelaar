@@ -34,4 +34,4 @@ flutter build apk --release --flavor controller --dart-define=APP_ROLE=controlle
 
 BELANGRIJK: geef bij elke build expliciet APP_ROLE mee. Zonder deze define valt de app terug op de standaardrol Controller, waardoor de Receiver ook het Controller-scherm kan tonen.
 
-Cloudfunctie: volume-remote v9.
+Cloudfunctie: volume-remote v10. De cloudlimiet die opdrachten binnen 100 ms blokkeerde is verwijderd; de bestaande pending-command-samenvoeging voor volume en helderheid blijft actief. De cloudfunctie accepteert nu ook de opdracht `wake`.
