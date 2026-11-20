@@ -12,6 +12,33 @@ const url = Deno.env.get("SUPABASE_URL");
 if (!serviceKey || !url) throw new Error("Server configuration missing");
 const db = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
+async function notifyDevice(deviceId: string): Promise<void> {
+  try {
+    const response = await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: {
+        "apikey": serviceKey,
+        "Authorization": `Bearer ${serviceKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [{
+          topic: `volume:${deviceId}`,
+          event: "command_available",
+          payload: {},
+        }],
+      }),
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!response.ok) {
+      console.error("Realtime notify failed", response.status, await response.text());
+    }
+  } catch (error) {
+    console.error("Realtime notify error", error);
+  }
+}
+
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "METHOD_NOT_ALLOWED" }, 405);
@@ -131,6 +158,8 @@ Deno.serve(async (req: Request) => {
           if (insertError) throw insertError;
         }
       }
+      // Wake the Receiver immediately instead of waiting for its 8–12s fallback poll.
+      await notifyDevice(deviceId);
       return json({ ok: true });
     }
     return json({ error: "UNKNOWN_ACTION" }, 400);
