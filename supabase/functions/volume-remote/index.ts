@@ -12,6 +12,22 @@ const url = Deno.env.get("SUPABASE_URL");
 if (!serviceKey || !url) throw new Error("Server configuration missing");
 const db = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
+async function broadcast(deviceId: string, event: string, payload: Record<string, unknown> = {}) {
+  try {
+    const response = await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: {
+        "apikey": serviceKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ messages: [{ topic: `volume:${deviceId}`, event, payload }] }),
+    });
+    if (!response.ok) console.error("Realtime broadcast failed", response.status, await response.text());
+  } catch (error) {
+    console.error("Realtime broadcast failed", error);
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "METHOD_NOT_ALLOWED" }, 405);
@@ -57,11 +73,11 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, deviceId: device.device_id, controllerSecret });
     }
 
-    if (["poll", "ack", "status", "send"].includes(action)) {
+    if (["poll", "ack", "heartbeat", "status", "send"].includes(action)) {
       const { deviceId, secret } = body;
       if (!validId(deviceId) || !validSecret(secret)) return json({ error: "INVALID_CREDENTIALS" }, 400);
       const secretHash = await sha256(secret);
-      if (action === "poll" || action === "ack") {
+      if (action === "poll" || action === "ack" || action === "heartbeat") {
         const { data: device, error } = await db.from("volume_remote_devices").select("device_secret_hash").eq("device_id", deviceId).maybeSingle();
         if (error) throw error;
         if (!device || device.device_secret_hash !== secretHash) return json({ error: "DEVICE_AUTH_FAILED" }, 401);
@@ -72,10 +88,16 @@ Deno.serve(async (req: Request) => {
           if (ackError) throw ackError;
           return json({ ok: true });
         }
-        const update: Record<string, unknown> = { last_seen_at: new Date().toISOString() };
+        const now = new Date().toISOString();
+        const update: Record<string, unknown> = { last_seen_at: now };
         if (body.status && typeof body.status === "object") update.status = body.status;
         const { error: updateError } = await db.from("volume_remote_devices").update(update).eq("device_id", deviceId);
         if (updateError) throw updateError;
+        await broadcast(deviceId, "status_updated", {
+          status: update.status ?? {},
+          lastSeenAt: now,
+        });
+        if (action === "heartbeat") return json({ ok: true });
         const { data: commands, error: commandError } = await db.from("volume_remote_commands").select("id, action, percent, payload")
           .eq("device_id", deviceId).is("delivered_at", null).order("id", { ascending: true }).limit(5);
         if (commandError) throw commandError;
@@ -109,11 +131,6 @@ Deno.serve(async (req: Request) => {
           return json({ error: "INVALID_WIFI_DETAILS" }, 400);
         }
       }
-      const { data: recent, error: recentError } = await db.from("volume_remote_commands").select("id").eq("device_id", deviceId)
-        .gte("created_at", new Date(Date.now() - 100).toISOString()).limit(1);
-      if (recentError) throw recentError;
-      if (recent?.length) return json({ error: "COMMAND_THROTTLED" }, 429);
-
       if (command === "wifi") {
         const wifiPayload = { ssid: payload.ssid.trim(), password: payload.password };
         const { error: insertError } = await db.from("volume_remote_commands").insert({
@@ -137,6 +154,7 @@ Deno.serve(async (req: Request) => {
           if (insertError) throw insertError;
         }
       }
+      await broadcast(deviceId, "command_available", {});
       return json({ ok: true });
     }
     return json({ error: "UNKNOWN_ACTION" }, 400);
