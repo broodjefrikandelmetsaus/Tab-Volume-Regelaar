@@ -191,12 +191,14 @@ class VolumeServerService : android.app.Service() {
                 PowerManager.ON_AFTER_RELEASE
             val wake = power.newWakeLock(flags, "$packageName:remote-screen-wake")
             wake.setReferenceCounted(false)
-            wake.acquire(3500L)
+            // Leave enough time for the user to notice the screen and enter
+            // the regular Android pattern before the temporary wake lock ends.
+            wake.acquire(15_000L)
             mainHandler.postDelayed({
                 try {
                     if (wake.isHeld) wake.release()
                 } catch (_: Exception) { }
-            }, 3000L)
+            }, 14_500L)
         } catch (_: Exception) { }
         scheduleCloudPolling(1000)
     }
