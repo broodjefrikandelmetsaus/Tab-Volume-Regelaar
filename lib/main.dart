@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -202,7 +202,7 @@ class _ReceiverGateState extends State<ReceiverGate> {
                 onSubmitted: (_) => _tryUnlock(),
                 decoration: InputDecoration(
                   labelText: 'Pincode',
-                  hintText: 'Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢',
+                  hintText: 'ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢',
                   errorText: _error.isEmpty ? null : _error,
                   border: const OutlineInputBorder(),
                 ),
@@ -535,7 +535,7 @@ class _ReceiverPageState extends State<ReceiverPage>
                   const SizedBox(height: 14),
                   Text(
                     cloudReady
-                        ? 'Cloudverbinding actief Ã¢â‚¬Â¢ werkt ook via mobiel internet en andere wifi.'
+                        ? 'Cloudverbinding actief ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ werkt ook via mobiel internet en andere wifi.'
                         : 'Cloudverbinding wordt gestart...',
                     textAlign: TextAlign.center,
                     style: TextStyle(
@@ -688,7 +688,7 @@ class _ReceiverPageState extends State<ReceiverPage>
                     icon: Icons.open_in_new_rounded,
                     title: 'YouTube Kids automatisch openen',
                     subtitle: kidsBackgroundAllowed
-                        ? 'Toegestaan â€¢ opent ook als Receiver op de achtergrond staat'
+                        ? 'Toegestaan Ã¢â‚¬Â¢ opent ook als Receiver op de achtergrond staat'
                         : 'Eenmalig toestaan via Android: over andere apps weergeven',
                     enabled: kidsBackgroundAllowed,
                     onPressed: requestKidsBackgroundPermission,
@@ -710,7 +710,7 @@ class _ReceiverPageState extends State<ReceiverPage>
                     ),
                     title: const Text('Batterijvriendelijke stand-by'),
                     subtitle: const Text(
-                      'Geen permanente wake-locks â€¢ directe Realtime-verbinding met zuinige terugvalcontrole',
+                      'Geen permanente wake-locks Ã¢â‚¬Â¢ directe Realtime-verbinding met zuinige terugvalcontrole',
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -1384,7 +1384,7 @@ class _ControllerPageState extends State<ControllerPage>
         // A cloud send only queues the command. Wait for the Receiver to
         // apply it and publish its actual state before changing the UI.
         var confirmed = false;
-        for (var attempt = 0; attempt < 12; attempt++) {
+        for (var attempt = 0; attempt < 24; attempt++) {
           await Future.delayed(const Duration(milliseconds: 500));
           final response = await CloudRelay.controllerStatus(
             deviceId: cloudDeviceId!,
@@ -2178,7 +2178,7 @@ class _ControllerSettingsPageState extends State<ControllerSettingsPage> {
                 obscureText: true,
                 decoration: const InputDecoration(
                   labelText: 'Zescijferige koppelcode (lokaal)',
-                  hintText: 'Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢',
+                  hintText: 'ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢',
                   prefixIcon: Icon(Icons.key_rounded),
                   border: OutlineInputBorder(),
                 ),
@@ -2445,6 +2445,7 @@ class _HueWheelPainter extends CustomPainter {
   bool shouldRepaint(covariant _HueWheelPainter oldDelegate) =>
       oldDelegate.color != color;
 }
+
 
 
 [executed on device: PC-van-Jake (1997e53f-651c-4a6a-959d-b2acccb4b133)]
