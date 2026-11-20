@@ -9,7 +9,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('Volume Controller shows brightness and volume side by side', (WidgetTester tester) async {
+  testWidgets('Volume Controller shows paired sliders and shortcuts', (WidgetTester tester) async {
     await tester.pumpWidget(const VolumeApp());
     await tester.pumpAndSettle();
 
@@ -18,6 +18,7 @@ void main() {
     expect(find.text('HELDERHEID'), findsOneWidget);
     expect(find.text('VOLUME'), findsOneWidget);
     expect(find.byType(VerticalVolumeControl), findsNWidgets(2));
+    expect(find.text('YouTube Kids'), findsOneWidget);
     expect(find.text('Stand-by'), findsOneWidget);
   });
 }

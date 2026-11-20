@@ -52,39 +52,40 @@ class ReceiverGate extends StatefulWidget {
   State<ReceiverGate> createState() => _ReceiverGateState();
 }
 
-class _ReceiverGateState extends State<ReceiverGate> with WidgetsBindingObserver {
+class _ReceiverGateState extends State<ReceiverGate> {
   final TextEditingController _pinController = TextEditingController();
   bool _unlocked = false;
+  bool _loadingGate = true;
   bool _exitDialogOpen = false;
   String _error = '';
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
+    _restoreGate();
+  }
+
+  Future<void> _restoreGate() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _unlocked = prefs.getBool('receiver_gate_unlocked') ?? false;
+      _loadingGate = false;
+    });
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _pinController.dispose();
     super.dispose();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if ((state == AppLifecycleState.hidden || state == AppLifecycleState.paused) && _unlocked && mounted) {
-      setState(() {
-        _unlocked = false;
-        _error = '';
-        _pinController.clear();
-      });
-    }
-  }
-
-  void _tryUnlock() {
+  Future<void> _tryUnlock() async {
     if (_pinController.text == '0000') {
       FocusScope.of(context).unfocus();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('receiver_gate_unlocked', true);
+      if (!mounted) return;
       setState(() {
         _unlocked = true;
         _error = '';
@@ -126,7 +127,11 @@ class _ReceiverGateState extends State<ReceiverGate> with WidgetsBindingObserver
     );
     controller.dispose();
     _exitDialogOpen = false;
-    if (allowed == true && mounted) SystemNavigator.pop();
+    if (allowed == true && mounted) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('receiver_gate_unlocked', false);
+      SystemNavigator.pop();
+    }
   }
 
   Widget _lockScreen() => Scaffold(
@@ -167,7 +172,9 @@ class _ReceiverGateState extends State<ReceiverGate> with WidgetsBindingObserver
     onPopInvokedWithResult: (didPop, result) {
       if (!didPop) _askUnlockToExit();
     },
-    child: _unlocked ? const ReceiverPage() : _lockScreen(),
+    child: _loadingGate
+        ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+        : (_unlocked ? const ReceiverPage() : _lockScreen()),
   );
 }
 
@@ -206,6 +213,11 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
     if (state == AppLifecycleState.resumed) {
       refresh();
       _startCloud();
+    } else if (state == AppLifecycleState.hidden || state == AppLifecycleState.paused) {
+      // The Android foreground service takes over cloud polling while this
+      // Activity is behind another app or the system lock screen.
+      cloudTimer?.cancel();
+      cloudTimer = null;
     }
   }
 
@@ -229,6 +241,9 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
       'brightnessPercent': result['brightnessPercent'] ?? info['brightnessPercent'] ?? 50,
       'canWriteBrightness': result['canWriteBrightness'] ?? info['canWriteBrightness'] ?? false,
       'lockAdminActive': result['lockAdminActive'] ?? info['lockAdminActive'] ?? false,
+      'standby': info['standby'] == true,
+      'secureLockScreen': info['secureLockScreen'] == true,
+      'batteryOptimizationIgnored': info['batteryOptimizationIgnored'] == true,
     };
   }
 
@@ -239,6 +254,10 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
       final credentials = await CloudRelay.deviceCredentials();
       cloudDeviceId = credentials.deviceId;
       cloudDeviceSecret = credentials.deviceSecret;
+      await native.invokeMethod('configureCloudRelay', {
+        'deviceId': credentials.deviceId,
+        'deviceSecret': credentials.deviceSecret,
+      });
       final info = Map<String, dynamic>.from(await native.invokeMethod('getReceiverInfo'));
       await CloudRelay.registerDevice(
         deviceId: credentials.deviceId,
@@ -282,6 +301,11 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
               'ssid': payload['ssid']?.toString() ?? '',
               'password': payload['password']?.toString() ?? '',
             });
+            await CloudRelay.acknowledge(deviceId: cloudDeviceId!, deviceSecret: cloudDeviceSecret!, commandId: id);
+            continue;
+          }
+          if (action == 'openKids') {
+            await native.invokeMethod('openYouTubeKids');
             await CloudRelay.acknowledge(deviceId: cloudDeviceId!, deviceSecret: cloudDeviceSecret!, commandId: id);
             continue;
           }
@@ -346,6 +370,24 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
     }
   }
 
+  Future<void> openScreenLockSettings() async {
+    try {
+      await native.invokeMethod('openScreenLockSettings');
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
+    }
+  }
+
+  Future<void> requestBatteryOptimizationExemption() async {
+    try {
+      await native.invokeMethod('requestBatteryOptimizationExemption');
+      await Future.delayed(const Duration(milliseconds: 900));
+      await refresh();
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
+    }
+  }
+
   Future<void> openWifiSettings() async {
     try {
       await native.invokeMethod('openWifiSettings');
@@ -395,6 +437,8 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
     final canWriteBrightness = info['canWriteBrightness'] == true;
     final lockAdminActive = info['lockAdminActive'] == true;
     final wifiPermissionGranted = info['wifiPermissionGranted'] == true;
+    final secureLockScreen = info['secureLockScreen'] == true;
+    final batteryOptimizationIgnored = info['batteryOptimizationIgnored'] == true;
     final kidsInstalled = info['youtubeKidsInstalled'] == true;
 
     return Scaffold(
@@ -489,6 +533,20 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
                   enabled: wifiPermissionGranted,
                   onPressed: requestWifiPermission,
                 ),
+                permissionTile(
+                  icon: Icons.pattern_rounded,
+                  title: 'Android-schermvergrendeling',
+                  subtitle: secureLockScreen ? 'Patroon/pincode actief' : 'Stel eerst een Android-patroon of pincode in',
+                  enabled: secureLockScreen,
+                  onPressed: openScreenLockSettings,
+                ),
+                permissionTile(
+                  icon: Icons.battery_charging_full_rounded,
+                  title: 'Achtergrond-wakeverbinding',
+                  subtitle: batteryOptimizationIgnored ? 'Batterijoptimalisatie uitgezonderd' : 'Eenmalig uitsluiten voor wakker maken op afstand',
+                  enabled: batteryOptimizationIgnored,
+                  onPressed: requestBatteryOptimizationExemption,
+                ),
                 const SizedBox(height: 16),
                 OutlinedButton.icon(
                   onPressed: openWifiSettings,
@@ -531,6 +589,9 @@ class _ControllerPageState extends State<ControllerPage> {
   int brightnessPercent = 50;
   bool canWriteBrightness = false;
   bool lockAdminActive = false;
+  bool tabletStandby = false;
+  bool secureLockScreen = false;
+  bool batteryOptimizationIgnored = false;
   String pairingCode = '';
   String? cloudDeviceId;
   String? cloudControllerSecret;
@@ -616,6 +677,9 @@ class _ControllerPageState extends State<ControllerPage> {
           if (status['brightnessPercent'] is num) brightnessPercent = (status['brightnessPercent'] as num).round().clamp(0, 100).toInt();
           canWriteBrightness = status['canWriteBrightness'] == true;
           lockAdminActive = status['lockAdminActive'] == true;
+          tabletStandby = status['standby'] == true;
+          secureLockScreen = status['secureLockScreen'] == true;
+          batteryOptimizationIgnored = status['batteryOptimizationIgnored'] == true;
         });
         timer?.cancel();
         timer = Timer.periodic(const Duration(seconds: 2), (_) => check());
@@ -650,6 +714,9 @@ class _ControllerPageState extends State<ControllerPage> {
         if (r['brightnessPercent'] is num) brightnessPercent = (r['brightnessPercent'] as num).round().clamp(0, 100).toInt();
         canWriteBrightness = r['canWriteBrightness'] == true;
         lockAdminActive = r['lockAdminActive'] == true;
+        tabletStandby = r['standby'] == true;
+        secureLockScreen = r['secureLockScreen'] == true;
+        batteryOptimizationIgnored = r['batteryOptimizationIgnored'] == true;
       });
       timer?.cancel();
       timer = Timer.periodic(const Duration(seconds: 2), (_) => check());
@@ -677,6 +744,9 @@ class _ControllerPageState extends State<ControllerPage> {
           if (status['brightnessPercent'] is num) brightnessPercent = (status['brightnessPercent'] as num).round().clamp(0, 100).toInt();
           canWriteBrightness = status['canWriteBrightness'] == true;
           lockAdminActive = status['lockAdminActive'] == true;
+          tabletStandby = status['standby'] == true;
+          secureLockScreen = status['secureLockScreen'] == true;
+          batteryOptimizationIgnored = status['batteryOptimizationIgnored'] == true;
         });
         return;
       }
@@ -689,6 +759,9 @@ class _ControllerPageState extends State<ControllerPage> {
           if (r['brightnessPercent'] is num) brightnessPercent = (r['brightnessPercent'] as num).round().clamp(0, 100).toInt();
           canWriteBrightness = r['canWriteBrightness'] == true;
           lockAdminActive = r['lockAdminActive'] == true;
+        tabletStandby = r['standby'] == true;
+        secureLockScreen = r['secureLockScreen'] == true;
+        batteryOptimizationIgnored = r['batteryOptimizationIgnored'] == true;
         });
       } else {
         setState(() => connected = false);
@@ -773,23 +846,43 @@ class _ControllerPageState extends State<ControllerPage> {
     );
   }
 
-  Future<void> _confirmLock() async {
+  Future<void> _toggleStandby() async {
     if (!connected) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('De tablet is niet verbonden.')));
       return;
     }
     if (!lockAdminActive) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Activeer eerst Scherm op afstand vergrendelen op de tablet.')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Activeer eerst Stand-by op afstand op de tablet.')));
+      return;
+    }
+    final goingToStandby = !tabletStandby;
+    if (goingToStandby && !secureLockScreen) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Stel eerst op de tablet een Android-patroon, pincode of wachtwoord in.')),
+      );
+      return;
+    }
+    if (goingToStandby && !batteryOptimizationIgnored) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sta op de tablet eerst Achtergrond-wakeverbinding toe. Dan kan hij tijdens stand-by naar het internet blijven luisteren.')),
+      );
       return;
     }
     final approved = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Tablet in stand-by zetten?'),
-        content: const Text('Weet je het zeker? De tablet gaat in stand-by: het scherm gaat uit en wordt vergrendeld, net als wanneer je één keer op de fysieke aan/uit-knop drukt.'),
+        title: Text(goingToStandby ? 'Tablet in stand-by zetten?' : 'Tablet wakker maken?'),
+        content: Text(
+          goingToStandby
+              ? 'Weet je het zeker? Het scherm gaat uit. De Receiver blijft op de achtergrond bereikbaar om hem later wakker te maken. Dit gebruikt extra batterij.'
+              : 'De tablet wordt wakker en toont het Android-vergrendelscherm. Voer daar je ingestelde patroon in; daarna ga je verder waar je gebleven was.',
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Annuleren')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Ja, stand-by')),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(goingToStandby ? 'Ja, stand-by' : 'Ja, wakker maken'),
+          ),
         ],
       ),
     );
@@ -798,25 +891,56 @@ class _ControllerPageState extends State<ControllerPage> {
     pendingCloudCommand = null;
     pendingCloudPercent = null;
     try {
+      final command = goingToStandby ? 'lock' : 'wake';
       if (cloudDeviceId != null && cloudControllerSecret != null) {
-        await CloudRelay.sendCommand(deviceId: cloudDeviceId!, controllerSecret: cloudControllerSecret!, command: 'lock');
-        if (mounted) {
-          setState(() => connected = false);
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Vergrendelopdracht via internet verzonden.')));
-        }
-        return;
-      }
-      final r = await sendCommand(ip.text.trim(), pin.text.trim(), 'lock');
-      if (r['ok'] == true) {
-        setState(() => connected = false);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tablet wordt vergrendeld.')));
+        await CloudRelay.sendCommand(
+          deviceId: cloudDeviceId!,
+          controllerSecret: cloudControllerSecret!,
+          command: command,
+        );
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${r['error'] ?? 'Vergrendelen mislukt'}')));
+        final response = await sendCommand(ip.text.trim(), pin.text.trim(), command);
+        if (response['ok'] != true) throw Exception(response['error'] ?? 'Opdracht mislukt');
       }
-    } catch (_) {
+      if (!mounted) return;
+      setState(() => tabletStandby = goingToStandby);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(goingToStandby
+          ? 'Stand-by aangezet.'
+          : 'Wakker-opdracht verstuurd. Ontgrendel de tablet met je Android-patroon.')),
+      );
+    } catch (e) {
       if (mounted) {
-        setState(() => connected = false);
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Verbinding verbroken bij vergrendelen.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Opdracht mislukt: $e')));
+        await check();
+      }
+    }
+  }
+
+  Future<void> _openYoutubeKids() async {
+    if (!connected) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Verbind eerst de tablet.')));
+      return;
+    }
+    try {
+      if (cloudDeviceId != null && cloudControllerSecret != null) {
+        await CloudRelay.sendCommand(
+          deviceId: cloudDeviceId!,
+          controllerSecret: cloudControllerSecret!,
+          command: 'openKids',
+        );
+      } else {
+        final response = await sendCommand(ip.text.trim(), pin.text.trim(), 'openKids');
+        if (response['ok'] != true) throw Exception(response['error'] ?? 'YouTube Kids openen mislukt');
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('YouTube Kids-opdracht verzonden. Staat Receiver op de achtergrond, dan verschijnt een melding op de tablet om het te openen.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('YouTube Kids openen lukte niet: $e')));
       }
     }
   }
@@ -952,13 +1076,41 @@ class _ControllerPageState extends State<ControllerPage> {
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
+              child: Material(
+                color: panelBackground,
+                borderRadius: BorderRadius.circular(18),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(18),
+                  onTap: connected ? _openYoutubeKids : null,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: const Color(0xFFFF4545).withOpacity(.35)),
+                    ),
+                    child: Row(children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.asset('assets/images/youtube_kids_icon.png', width: 46, height: 46, fit: BoxFit.cover),
+                      ),
+                      const SizedBox(width: 13),
+                      const Expanded(child: Text('YouTube Kids', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800))),
+                      Icon(Icons.open_in_new_rounded, color: Colors.white.withOpacity(.72)),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
               child: OutlinedButton.icon(
-                onPressed: connected ? _confirmLock : null,
-                icon: const Icon(Icons.power_settings_new_rounded),
-                label: const Text('Stand-by'),
+                onPressed: connected ? _toggleStandby : null,
+                icon: Icon(tabletStandby ? Icons.wb_sunny_rounded : Icons.power_settings_new_rounded),
+                label: Text(tabletStandby ? 'Wakker maken' : 'Stand-by'),
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFFFF7B82),
-                  side: BorderSide(color: const Color(0xFFFF626D).withOpacity(.55)),
+                  foregroundColor: tabletStandby ? const Color(0xFF42D69A) : const Color(0xFFFF7B82),
+                  side: BorderSide(color: (tabletStandby ? const Color(0xFF42D69A) : const Color(0xFFFF626D)).withOpacity(.55)),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
               ),

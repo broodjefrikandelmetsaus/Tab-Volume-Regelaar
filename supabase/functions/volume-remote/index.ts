@@ -96,8 +96,8 @@ Deno.serve(async (req: Request) => {
       const command = body?.command;
       const percent = body?.percent;
       const payload = body?.payload;
-      if (!["set", "setBrightness", "lock", "wifi"].includes(command) ||
-          (command !== "lock" && command !== "wifi" && (!Number.isInteger(percent) || percent < 0 || percent > 100))) {
+      if (!["set", "setBrightness", "lock", "wifi", "wake", "openKids"].includes(command) ||
+          (command !== "lock" && command !== "wifi" && command !== "wake" && command !== "openKids" && (!Number.isInteger(percent) || percent < 0 || percent > 100))) {
         return json({ error: "INVALID_COMMAND" }, 400);
       }
       if (command === "wifi") {
@@ -120,8 +120,10 @@ Deno.serve(async (req: Request) => {
           device_id: deviceId, action: command, percent: null, payload: wifiPayload
         });
         if (insertError) throw insertError;
-      } else if (command === "lock") {
-        const { error: insertError } = await db.from("volume_remote_commands").insert({ device_id: deviceId, action: command, percent: null });
+      } else if (["lock", "wake", "openKids"].includes(command)) {
+        const { error: insertError } = await db.from("volume_remote_commands").insert({
+          device_id: deviceId, action: command, percent: null, payload: null
+        });
         if (insertError) throw insertError;
       } else {
         const { data: pending, error: pendingError } = await db.from("volume_remote_commands").select("id")

@@ -1,6 +1,7 @@
 package nl.jake.volume_remote
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
@@ -15,6 +16,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
 import android.util.Base64
@@ -28,6 +30,20 @@ class MainActivity : FlutterActivity() {
     private var pendingWifiScanResult: MethodChannel.Result? = null
     private val adminComponent by lazy {
         ComponentName(this, VolumeDeviceAdminReceiver::class.java)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (packageName.endsWith(".receiver")) {
+            VolumeServerService.setReceiverUiForeground(true)
+        }
+    }
+
+    override fun onPause() {
+        if (packageName.endsWith(".receiver")) {
+            VolumeServerService.setReceiverUiForeground(false)
+        }
+        super.onPause()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -188,6 +204,9 @@ class MainActivity : FlutterActivity() {
                         "brightnessPercent" to VolumeServerService.currentBrightnessPercent(this),
                         "canWriteBrightness" to Settings.System.canWrite(this),
                         "lockAdminActive" to getSystemService(DevicePolicyManager::class.java).isAdminActive(adminComponent),
+                        "standby" to getSharedPreferences("volume_remote", MODE_PRIVATE).getBoolean("standby", false),
+                        "secureLockScreen" to getSystemService(KeyguardManager::class.java).isDeviceSecure,
+                        "batteryOptimizationIgnored" to getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName),
                         "wifiPermissionGranted" to (Build.VERSION.SDK_INT < 33 ||
                             checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) == PackageManager.PERMISSION_GRANTED),
                         "youtubeKidsInstalled" to (packageManager.getLaunchIntentForPackage("com.google.android.apps.youtube.kids") != null)
@@ -206,6 +225,31 @@ class MainActivity : FlutterActivity() {
                         putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Sta Volume Remote toe om de tablet op afstand in stand-by te zetten.")
                     }
                     startActivity(intent)
+                    result.success(true)
+                }
+                "configureCloudRelay" -> {
+                    val deviceId = call.argument<String>("deviceId") ?: ""
+                    val deviceSecret = call.argument<String>("deviceSecret") ?: ""
+                    try {
+                        CloudCredentialStore.save(this, deviceId, deviceSecret)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("CLOUD_CREDENTIALS_FAILED", e.message, null)
+                    }
+                }
+                "openScreenLockSettings" -> {
+                    startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
+                    result.success(true)
+                }
+                "requestBatteryOptimizationExemption" -> {
+                    val power = getSystemService(PowerManager::class.java)
+                    if (!power.isIgnoringBatteryOptimizations(packageName)) {
+                        val intent = Intent(
+                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.parse("package:$packageName")
+                        )
+                        startActivity(intent)
+                    }
                     result.success(true)
                 }
                 "requestWifiPermission" -> {

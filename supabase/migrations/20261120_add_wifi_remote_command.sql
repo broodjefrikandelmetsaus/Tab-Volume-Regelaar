@@ -6,4 +6,11 @@ alter table public.volume_remote_commands
 
 alter table public.volume_remote_commands
   add constraint volume_remote_commands_action_check
-  check (action = any (array['set'::text, 'setBrightness'::text, 'lock'::text, 'wifi'::text]));
+  check (action = any (array[
+    'set'::text,
+    'setBrightness'::text,
+    'lock'::text,
+    'wifi'::text,
+    'wake'::text,
+    'openKids'::text
+  ]));

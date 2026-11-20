@@ -1,50 +1,66 @@
-# Tab Volume Regelaar — testbuild 1.0.1
+# Tab Volume Regelaar — versie 1.0.2 (build 3)
 
-Flutter Android-app met twee APK's: **Volume Receiver** (tablet) en **Volume Controller** (telefoon).
+Twee Android-apps:
+- **Volume Receiver** op de tablet: draait als foreground-service, ook wanneer de app-UI op de achtergrond staat.
+- **Volume Controller** op de telefoon: bedient de tablet via de Supabase-cloudrelay.
 
-## Functies
-- Twee gelijktijdige verticale regelaars op de telefoon: links helderheid, rechts mediavolume.
-- Beide regelaars hebben dezelfde stijl en tonen hun eigen percentage (0–100%).
-- Stand-by via Android Device Admin: scherm uit en tablet vergrendeld, vergelijkbaar met één korte druk op de fysieke aan/uit-knop. Geen volledige power-off.
-- Wifi-hulp: telefoon scant netwerken, kiest SSID en wachtwoord, verstuurt dit via de beveiligde cloudrelay; tablet voegt een Android Wifi Network Suggestion toe.
-- YouTube Kids-snelkoppeling met echt app-icoon wanneer de app op de tablet aanwezig is.
-- Lokale bediening via TCP en cloudbediening via Supabase, dus telefoon en tablet hoeven niet op hetzelfde netwerk te zitten.
+## Controller
+- Twee verticale regelaars tegelijk: links **helderheid**, rechts **volume**, met ieder een eigen percentage.
+- Brede **YouTube Kids**-snelkoppeling met app-logo.
+- **Stand-by / Wakker maken** met bevestigingsvenster.
+- Wifi-hulp: telefoon scant wifi-netwerken, kiest netwerk/wachtwoord en verstuurt dit via de cloudrelay.
+
+## Stand-by en terugkeren naar waar je was
+- Stand-by gebruikt Android Device Admin `DevicePolicyManager.lockNow()`.
+- Android toont daarna zijn eigen beveiligde vergrendelscherm. De gebruiker ontgrendelt met het normale tabletpatroon, de normale pincode of het wachtwoord.
+- Receiver start bij het wakker maken **geen Activity** en haalt zichzelf niet naar de voorgrond. Na de Android-ontgrendeling hoort Android dus de app te herstellen die vóór stand-by actief was (bijvoorbeeld YouTube Kids, browser of een andere app).
+- De extra Receiver-appcode `0000` wordt niet opnieuw gevraagd zodra Receiver eenmaal ontgrendeld is. Alleen de expliciete Receiver-afsluitactie reset deze app-gate.
+- Tijdens remote stand-by houdt de native foreground-service tijdelijk een CPU partial wake lock en wifi-lock vast en pollt Supabase ongeveer elke 6 seconden. Dit kost extra batterij.
+- Voor betrouwbare achtergrondwerking moet in Receiver **Achtergrond-wakeverbinding** worden toegestaan zodat Android batterijoptimalisatie voor deze app uitsluit. De gebruiker kan dit ook later weer intrekken.
+- De wake-functie gebruikt de Android wake-lock vlag `ACQUIRE_CAUSES_WAKEUP` om het scherm te laten oplichten zonder een app-Activity te starten. Deze API is verouderd en gedrag kan per Android-versie/fabrikant verschillen; daarom moet het echte wakker maken nog op de doeltablet worden getest.
+- Als Android, de fabrikant, de batterij of de netwerkverbinding de service toch stopt, is remote wake tijdelijk niet beschikbaar. Start Receiver opnieuw en controleer de achtergrondtoestemming.
+
+## YouTube Kids
+- Als Receiver zichtbaar is op de tablet, verwerkt de app de opdracht en opent YouTube Kids rechtstreeks.
+- Staat Receiver op de achtergrond, dan beperkt Android het automatisch starten van een andere app. In dat geval plaatst de Receiver een melding **YouTube Kids openen** op de tablet; tik daarop om YouTube Kids te openen.
+- Wanneer YouTube Kids niet geïnstalleerd is, opent de snelkoppeling de Play Store-pagina.
+
+## Eenmalige instellingen op de tablet
+1. Open Receiver en voer de appcode `0000` in.
+2. Sta **Helderheid op afstand** toe in Android-instellingen.
+3. Activeer **Stand-by op afstand** bij Android Device Admin.
+4. Zorg dat een Android-patroon, pincode of wachtwoord is ingesteld.
+5. Sta **Wifi instellen op afstand** toe.
+6. Sta **Achtergrond-wakeverbinding** toe (batterijoptimalisatie uitsluiten).
+7. Laat Receiver één keer online koppelen zodat de cloudreferenties in Android Keystore worden opgeslagen.
 
 ## Internet koppelen
-1. Open Volume Receiver op de tablet en ontgrendel met de viercijferige app-PIN.
-2. Laat Volume Receiver actief; de tablet toont een zescijferige internet-koppelcode.
-3. Open Instellingen in Volume Controller, vul de code in bij **Internet-koppelcode** en kies **Opslaan en verbinden**.
-4. De koppelcode verloopt na 10 minuten. Het apparaat- en controllergeheim worden veilig op de apparaten bewaard.
+1. Open Receiver op de tablet; hij toont de zescijferige internet-koppelcode.
+2. Open Controller > Instellingen op de telefoon.
+3. Vul de code in bij **Internet-koppelcode** en kies **Opslaan en verbinden**.
+4. De code verloopt na 10 minuten. Telefoon en tablet hoeven niet op dezelfde wifi te zitten.
 
-## Eenmalige toestemmingen
-Op de tablet:
-- Sta **Helderheid op afstand** toe via Android-instellingen.
-- Activeer **Stand-by op afstand** bij Android Device Admin.
-- Sta **Wifi instellen op afstand** toe als Android daarom vraagt.
+## Wifi op afstand
+- De telefoon scant de zichtbare netwerken en verstuurt SSID/wachtwoord via een geauthenticeerde Supabase-opdracht.
+- De tablet voegt het netwerk toe als Android Wifi Network Suggestion.
+- Android kan op de tablet nog bevestiging tonen en kiest zelf wanneer de suggestie wordt gebruikt; een stille, gegarandeerde onmiddellijke omschakeling is niet mogelijk met een gewone app.
+- Het wifi-wachtwoord wordt na ontvangst/acknowledgement uit de serverwachtrij gewist.
 
-Op de telefoon:
-- Sta de gevraagde locatietoegang toe om beschikbare wifi-netwerken te kunnen scannen. Android beperkt wifi-scans afhankelijk van versie en systeeminstellingen.
+## Backend en beveiliging
+- Supabase project: `nstpzmuimwjbvlvvbrsr` (EU West)
+- Edge Function: `volume-remote`, versie 6
+- De Edge Function beheert pairing, controller-autorisatie, opdrachten, wake en YouTube Kids-fallback.
+- Database-tabellen hebben RLS aan; de service/secret key staat niet in de APK of openbare repository.
+- De Receiver bewaart de achtergrond-device-identiteit en het device secret versleuteld met Android Keystore (AES-GCM).
 
-## Wifi instellen
-- De telefoon scant de netwerken die op dat moment in de buurt van de telefoon zichtbaar zijn.
-- Kies het netwerk, voer het wachtwoord in en verstuur het naar de tablet.
-- De tablet moet online zijn om het verzoek via de cloud te ontvangen.
-- Android gebruikt een wifi-netwerksuggestie. Android kan een melding/toestemmingsscherm tonen en beslist zelf wanneer er verbinding mee wordt gemaakt. Dit forceert dus geen gegarandeerde onmiddellijke of stille netwerkovergang.
-- De wifi-gegevens worden uit de serverwachtrij gewist zodra de tablet de opdracht bevestigt.
-
-## Stand-by
-De knop **Stand-by** vraagt eerst om bevestiging en gebruikt Android Device Admin om het scherm uit te zetten en het apparaat te vergrendelen. Zet de tablet daarna met de fysieke aan/uit-knop weer aan en ontgrendel hem normaal.
-
-## Belangrijke testbeperking
-De cloudpolling loopt vanuit de geopende Receiver-app. Houd de Receiver actief op de tablet; Android kan netwerkcommando's vertragen wanneer de app op de achtergrond staat of het apparaat in diepe slaap is. Stand-by is bedoeld om het scherm uit te zetten, niet om de tablet op afstand weer wakker te maken.
-
-## Tests
-- `flutter test`: geslaagd.
-- Receiver release-APK en Controller release-APK: gebouwd.
-- Beide APK-handtekeningen: geverifieerd.
-- Er waren geen fysieke Android-apparaten via ADB aangesloten; bediening op echte apparaten moet nog samen getest worden.
-
-## Supabase
-- Project: `nstpzmuimwjbvlvvbrsr` (EU West)
-- Edge Function: `volume-remote` (versie 5)
-- Database-tabellen gebruiken RLS; geheime serverkey staat niet in de mobiele app.
+## Bouwen en controles
+```bash
+flutter pub get
+flutter test
+flutter build apk --release --flavor receiver --dart-define=APP_ROLE=receiver
+flutter build apk --release --flavor controller --dart-define=APP_ROLE=controller
+```
+- Widgettests: geslaagd.
+- Receiver en Controller release-APK's: gebouwd.
+- APK-handtekeningen: worden voor distributie opnieuw gecontroleerd.
+- Er waren geen fysieke Android-apparaten via ADB aangesloten; remote standby/wake en herstel van de vorige app moeten nog op de echte tablet worden getest.
