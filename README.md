@@ -1,4 +1,4 @@
-# Tab Volume Regelaar — versie 1.0.4 (build 5)
+# Tab Volume Regelaar — versie 1.0.5 (build 6)
 
 Twee Android-apps:
 - **Volume Receiver** op de tablet: foreground service en Supabase-cloudrelay.
@@ -62,3 +62,23 @@ flutter build apk --release --flavor controller --dart-define=APP_ROLE=controlle
 
 - Widgettests: geslaagd.
 - Fysieke standby/wake en batterijmeting: nog niet uitgevoerd.
+
+
+## Update 6 — live bediening
+
+- Supabase Realtime Broadcast / WebSocket voor directe opdrachtmeldingen.
+- Controller verstuurt sliderwaarden met een throttle van 65 ms tijdens het slepen.
+- Receiver haalt de opdracht direct na het Realtime-seintje op via de geauthenticeerde Edge Function.
+- Na uitvoering stuurt de Receiver de actuele apparaatstatus terug via een heartbeat.
+- Automatisch herverbinden en fallbackcontrole als de WebSocket wegvalt.
+- Edge Function: volume-remote v8.
+
+### Android-beperkingen
+
+Android kan netwerkverkeer in diepe Doze/batterijbesparing uitstellen. Een open WebSocket garandeert daarom niet dat de tablet op elk moment direct vanuit diepe slaap wakker wordt. Firebase Cloud Messaging is nog niet ingesteld.
+
+Wifi-verzoeken worden via Android WifiNetworkSuggestion aangeboden. Android bepaalt zelf of en wanneer een netwerk wordt gebruikt en kan goedkeuring vragen; de app kan de OS-verbinding niet forceren.
+
+De praktische reactiesnelheid en het batterijverbruik moeten nog op de echte telefoon en tablet worden gemeten.
+
+[executed on device: PC-van-Jake (1997e53f-651c-4a6a-959d-b2acccb4b133)]
