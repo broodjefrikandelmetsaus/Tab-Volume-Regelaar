@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'cloud_relay.dart';
+import 'cloud_realtime.dart';
 
 const role = String.fromEnvironment('APP_ROLE', defaultValue: 'controller');
 const native = MethodChannel('nl.jake.volume_remote/receiver');
@@ -245,7 +246,7 @@ class _ReceiverPageState extends State<ReceiverPage>
   Map<String, dynamic> info = {};
   String error = '';
   Uint8List? kidsIcon;
-  Timer? cloudTimer;
+  Timer? cloudRetryTimer;
   String? cloudDeviceId;
   String? cloudDeviceSecret;
   bool cloudReady = false;
@@ -261,7 +262,7 @@ class _ReceiverPageState extends State<ReceiverPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    cloudTimer?.cancel();
+    cloudRetryTimer?.cancel();
     super.dispose();
   }
 
@@ -270,12 +271,6 @@ class _ReceiverPageState extends State<ReceiverPage>
     if (state == AppLifecycleState.resumed) {
       refresh();
       _startCloud();
-    } else if (state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.paused) {
-      // The Android foreground service takes over cloud polling while this
-      // Activity is behind another app or the system lock screen.
-      cloudTimer?.cancel();
-      cloudTimer = null;
     }
   }
 
@@ -317,10 +312,6 @@ class _ReceiverPageState extends State<ReceiverPage>
       final credentials = await CloudRelay.deviceCredentials();
       cloudDeviceId = credentials.deviceId;
       cloudDeviceSecret = credentials.deviceSecret;
-      await native.invokeMethod('configureCloudRelay', {
-        'deviceId': credentials.deviceId,
-        'deviceSecret': credentials.deviceSecret,
-      });
       final info = Map<String, dynamic>.from(
         await native.invokeMethod('getReceiverInfo'),
       );
@@ -330,83 +321,21 @@ class _ReceiverPageState extends State<ReceiverPage>
         pairingCode: info['pin'].toString(),
         status: await _localStatus(),
       );
+      await native.invokeMethod('configureCloudRelay', {
+        'deviceId': credentials.deviceId,
+        'deviceSecret': credentials.deviceSecret,
+      });
+      cloudRetryTimer?.cancel();
+      cloudRetryTimer = null;
       if (mounted) setState(() => cloudReady = true);
-      cloudTimer?.cancel();
-      cloudTimer = Timer.periodic(
-        const Duration(seconds: 10),
-        (_) => _pollCloud(),
-      );
     } catch (e) {
       if (mounted)
         setState(() {
           cloudReady = false;
           error = 'Cloudverbinding: $e';
         });
-      cloudTimer?.cancel();
-      cloudTimer = Timer(const Duration(seconds: 30), _startCloud);
-    } finally {
-      cloudBusy = false;
-    }
-  }
-
-  Future<void> _pollCloud() async {
-    if (cloudBusy || cloudDeviceId == null || cloudDeviceSecret == null) return;
-    cloudBusy = true;
-    try {
-      final response = await CloudRelay.pollDevice(
-        deviceId: cloudDeviceId!,
-        deviceSecret: cloudDeviceSecret!,
-        status: await _localStatus(),
-      );
-      final commands = response['commands'];
-      if (commands is List) {
-        for (final item in commands) {
-          if (item is! Map) continue;
-          final id = (item['id'] as num?)?.toInt();
-          final action = item['action']?.toString() ?? '';
-          final percent = (item['percent'] as num?)?.toInt();
-          if (id == null) continue;
-          if (action == 'wifi') {
-            final payload = item['payload'];
-            if (payload is! Map) continue;
-            await native.invokeMethod('addWifiSuggestion', {
-              'ssid': payload['ssid']?.toString() ?? '',
-              'password': payload['password']?.toString() ?? '',
-            });
-            await CloudRelay.acknowledge(
-              deviceId: cloudDeviceId!,
-              deviceSecret: cloudDeviceSecret!,
-              commandId: id,
-            );
-            continue;
-          }
-          if (action == 'openKids') {
-            await native.invokeMethod('openYouTubeKids');
-            await CloudRelay.acknowledge(
-              deviceId: cloudDeviceId!,
-              deviceSecret: cloudDeviceSecret!,
-              commandId: id,
-            );
-            continue;
-          }
-          final result = await sendCommand(
-            '127.0.0.1',
-            (await native.invokeMethod('getReceiverInfo'))['pin'].toString(),
-            action,
-            percent,
-          );
-          if (result['ok'] == true) {
-            await CloudRelay.acknowledge(
-              deviceId: cloudDeviceId!,
-              deviceSecret: cloudDeviceSecret!,
-              commandId: id,
-            );
-          }
-        }
-      }
-      if (mounted && !cloudReady) setState(() => cloudReady = true);
-    } catch (_) {
-      if (mounted && cloudReady) setState(() => cloudReady = false);
+      cloudRetryTimer?.cancel();
+      cloudRetryTimer = Timer(const Duration(seconds: 10), _startCloud);
     } finally {
       cloudBusy = false;
     }
@@ -548,8 +477,6 @@ class _ReceiverPageState extends State<ReceiverPage>
     final lockAdminActive = info['lockAdminActive'] == true;
     final wifiPermissionGranted = info['wifiPermissionGranted'] == true;
     final secureLockScreen = info['secureLockScreen'] == true;
-    final batteryOptimizationIgnored =
-        info['batteryOptimizationIgnored'] == true;
     final kidsInstalled = info['youtubeKidsInstalled'] == true;
 
     return Scaffold(
@@ -771,7 +698,7 @@ class _ReceiverPageState extends State<ReceiverPage>
                     ),
                     title: const Text('Batterijvriendelijke stand-by'),
                     subtitle: const Text(
-                      'Geen permanente wake-locks • cloudcontrole ongeveer elke 45 seconden',
+                      'Geen permanente wake-locks • directe Realtime-verbinding met zuinige terugvalcontrole',
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -843,6 +770,7 @@ class _ControllerPageState extends State<ControllerPage>
   String? pendingCloudCommand;
   int? pendingCloudPercent;
   Timer? cloudSendTimer;
+  CloudRealtimeChannel? realtimeChannel;
   Color accent = defaultAccent;
   Timer? timer;
 
@@ -860,7 +788,12 @@ class _ControllerPageState extends State<ControllerPage>
           cloudDeviceId != null && cloudControllerSecret != null;
       final hasLocalPairing =
           ip.text.trim().isNotEmpty && pin.text.trim().length == 6;
-      if (hasCloudPairing || hasLocalPairing) {
+      if (hasCloudPairing) {
+        check();
+        timer?.cancel();
+        timer = null;
+        _startRealtime();
+      } else if (hasLocalPairing) {
         check();
         timer?.cancel();
         timer = Timer.periodic(const Duration(seconds: 15), (_) => check());
@@ -870,6 +803,9 @@ class _ControllerPageState extends State<ControllerPage>
         state == AppLifecycleState.paused) {
       timer?.cancel();
       timer = null;
+      final channel = realtimeChannel;
+      realtimeChannel = null;
+      if (channel != null) unawaited(channel.close());
     }
   }
 
@@ -891,9 +827,68 @@ class _ControllerPageState extends State<ControllerPage>
     WidgetsBinding.instance.removeObserver(this);
     timer?.cancel();
     cloudSendTimer?.cancel();
+    final channel = realtimeChannel;
+    if (channel != null) unawaited(channel.close());
     ip.dispose();
     pin.dispose();
     super.dispose();
+  }
+
+  void _startRealtime() {
+    final id = cloudDeviceId;
+    if (id == null || cloudControllerSecret == null) return;
+
+    final oldChannel = realtimeChannel;
+    if (oldChannel != null) unawaited(oldChannel.close());
+
+    final channel = CloudRealtimeChannel(
+      deviceId: id,
+      onStatus: _applyRealtimeStatus,
+      onConnectionChanged: (live) {
+        if (!mounted ||
+            WidgetsBinding.instance.lifecycleState !=
+                AppLifecycleState.resumed) {
+          return;
+        }
+        if (live) {
+          timer?.cancel();
+          timer = null;
+          unawaited(check());
+        } else if (timer?.isActive != true) {
+          timer = Timer.periodic(const Duration(seconds: 15), (_) => check());
+        }
+      },
+    );
+    realtimeChannel = channel;
+    unawaited(channel.start());
+  }
+
+  void _applyRealtimeStatus(Map<String, dynamic> data) {
+    final rawStatus = data['status'];
+    final status = rawStatus is Map
+        ? Map<String, dynamic>.from(rawStatus)
+        : <String, dynamic>{};
+    final lastSeen = DateTime.tryParse(data['lastSeenAt']?.toString() ?? '');
+    final online =
+        lastSeen != null && DateTime.now().difference(lastSeen).inSeconds < 90;
+    if (!mounted) return;
+    setState(() {
+      connected = online;
+      if (status['percent'] is num) {
+        percent = (status['percent'] as num).round().clamp(0, 100).toInt();
+      }
+      if (status['brightnessPercent'] is num) {
+        brightnessPercent = (status['brightnessPercent'] as num)
+            .round()
+            .clamp(0, 100)
+            .toInt();
+      }
+      canWriteBrightness = status['canWriteBrightness'] == true;
+      lockAdminActive = status['lockAdminActive'] == true;
+      tabletStandby = status['standby'] == true;
+      secureLockScreen = status['secureLockScreen'] == true;
+      batteryOptimizationIgnored = status['batteryOptimizationIgnored'] == true;
+    });
   }
 
   Future<void> _openSettings() async {
@@ -963,7 +958,8 @@ class _ControllerPageState extends State<ControllerPage>
               status['batteryOptimizationIgnored'] == true;
         });
         timer?.cancel();
-        timer = Timer.periodic(const Duration(seconds: 15), (_) => check());
+        timer = null;
+        _startRealtime();
         if (!online) throw Exception('Tablet is nog niet online via de cloud');
         return;
       }
@@ -1113,32 +1109,37 @@ class _ControllerPageState extends State<ControllerPage>
       if (cloudDeviceId != null && cloudControllerSecret != null) {
         pendingCloudCommand = isBrightness ? 'setBrightness' : 'set';
         pendingCloudPercent = next;
-        cloudSendTimer?.cancel();
-        cloudSendTimer = Timer(const Duration(milliseconds: 180), () async {
-          final command = pendingCloudCommand;
-          final value = pendingCloudPercent;
-          if (command == null ||
-              value == null ||
-              cloudDeviceId == null ||
-              cloudControllerSecret == null)
-            return;
-          try {
-            await CloudRelay.sendCommand(
-              deviceId: cloudDeviceId!,
-              controllerSecret: cloudControllerSecret!,
-              command: command,
-              percent: value,
-            );
-          } catch (_) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Cloudopdracht kon niet worden verstuurd.'),
-                ),
-              );
+        if (cloudSendTimer?.isActive != true) {
+          cloudSendTimer = Timer(const Duration(milliseconds: 65), () async {
+            cloudSendTimer = null;
+            final command = pendingCloudCommand;
+            final value = pendingCloudPercent;
+            pendingCloudCommand = null;
+            pendingCloudPercent = null;
+            if (command == null ||
+                value == null ||
+                cloudDeviceId == null ||
+                cloudControllerSecret == null) {
+              return;
             }
-          }
-        });
+            try {
+              await CloudRelay.sendCommand(
+                deviceId: cloudDeviceId!,
+                controllerSecret: cloudControllerSecret!,
+                command: command,
+                percent: value,
+              );
+            } catch (_) {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Cloudopdracht kon niet worden verstuurd.'),
+                  ),
+                );
+              }
+            }
+          });
+        }
         return;
       }
       final r = await sendCommand(
@@ -1234,7 +1235,7 @@ class _ControllerPageState extends State<ControllerPage>
         ),
         content: Text(
           goingToStandby
-              ? 'Weet je het zeker? Het scherm gaat uit. De Receiver controleert in de zuinige modus ongeveer elke 45 seconden op een wake-opdracht. Wakker maken kan daardoor iets langer duren.'
+              ? 'Weet je het zeker? Het scherm gaat uit. De tablet blijft via een directe cloudverbinding bereikbaar; Android kan netwerkverkeer in diepe slaap soms tijdelijk uitstellen.'
               : 'De tablet wordt wakker en toont het Android-vergrendelscherm. Voer daar je ingestelde patroon in; daarna ga je verder waar je gebleven was.',
         ),
         actions: [
@@ -2313,3 +2314,5 @@ class _HueWheelPainter extends CustomPainter {
   bool shouldRepaint(covariant _HueWheelPainter oldDelegate) =>
       oldDelegate.color != color;
 }
+
+[executed on device: PC-van-Jake (1997e53f-651c-4a6a-959d-b2acccb4b133)]
