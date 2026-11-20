@@ -267,7 +267,7 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
       );
       if (mounted) setState(() => cloudReady = true);
       cloudTimer?.cancel();
-      cloudTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollCloud());
+      cloudTimer = Timer.periodic(const Duration(seconds: 10), (_) => _pollCloud());
     } catch (e) {
       if (mounted) setState(() { cloudReady = false; error = 'Cloudverbinding: $e'; });
       cloudTimer?.cancel();
@@ -540,12 +540,11 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
                   enabled: secureLockScreen,
                   onPressed: openScreenLockSettings,
                 ),
-                permissionTile(
-                  icon: Icons.battery_charging_full_rounded,
-                  title: 'Achtergrond-wakeverbinding',
-                  subtitle: batteryOptimizationIgnored ? 'Batterijoptimalisatie uitgezonderd' : 'Eenmalig uitsluiten voor wakker maken op afstand',
-                  enabled: batteryOptimizationIgnored,
-                  onPressed: requestBatteryOptimizationExemption,
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.battery_saver_rounded, color: Color(0xFF42D69A)),
+                  title: const Text('Batterijvriendelijke stand-by'),
+                  subtitle: const Text('Geen permanente wake-locks • cloudcontrole ongeveer elke 45 seconden'),
                 ),
                 const SizedBox(height: 16),
                 OutlinedButton.icon(
@@ -862,19 +861,13 @@ class _ControllerPageState extends State<ControllerPage> {
       );
       return;
     }
-    if (goingToStandby && !batteryOptimizationIgnored) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sta op de tablet eerst Achtergrond-wakeverbinding toe. Dan kan hij tijdens stand-by naar het internet blijven luisteren.')),
-      );
-      return;
-    }
     final approved = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text(goingToStandby ? 'Tablet in stand-by zetten?' : 'Tablet wakker maken?'),
         content: Text(
           goingToStandby
-              ? 'Weet je het zeker? Het scherm gaat uit. De Receiver blijft op de achtergrond bereikbaar om hem later wakker te maken. Dit gebruikt extra batterij.'
+              ? 'Weet je het zeker? Het scherm gaat uit. De Receiver controleert in de zuinige modus ongeveer elke 45 seconden op een wake-opdracht. Wakker maken kan daardoor iets langer duren.'
               : 'De tablet wordt wakker en toont het Android-vergrendelscherm. Voer daar je ingestelde patroon in; daarna ga je verder waar je gebleven was.',
         ),
         actions: [
