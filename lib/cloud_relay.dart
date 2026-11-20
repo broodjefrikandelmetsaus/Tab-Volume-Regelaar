@@ -95,7 +95,15 @@ class CloudRelay {
     required String controllerSecret,
     required String command,
     int? percent,
+    Map<String, dynamic>? payload,
   }) async {
-    await _post({'action': 'send', 'deviceId': deviceId, 'secret': controllerSecret, 'command': command, if (percent != null) 'percent': percent});
+    await _post({
+      'action': 'send',
+      'deviceId': deviceId,
+      'secret': controllerSecret,
+      'command': command,
+      if (percent != null) 'percent': percent,
+      if (payload != null) 'payload': payload,
+    });
   }
 }
