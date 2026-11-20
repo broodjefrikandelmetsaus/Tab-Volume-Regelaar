@@ -1,0 +1,1 @@
+alter table public.volume_remote_devices add column pairing_expires_at timestamptz;
