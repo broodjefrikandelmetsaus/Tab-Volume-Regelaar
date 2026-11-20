@@ -232,6 +232,7 @@ class MainActivity : FlutterActivity() {
                     val deviceSecret = call.argument<String>("deviceSecret") ?: ""
                     try {
                         CloudCredentialStore.save(this, deviceId, deviceSecret)
+                        VolumeServerService.onCloudCredentialsUpdated()
                         result.success(true)
                     } catch (e: Exception) {
                         result.error("CLOUD_CREDENTIALS_FAILED", e.message, null)
@@ -276,3 +277,5 @@ class MainActivity : FlutterActivity() {
         }
     }
 }
+
+[executed on device: PC-van-Jake (1997e53f-651c-4a6a-959d-b2acccb4b133)]
