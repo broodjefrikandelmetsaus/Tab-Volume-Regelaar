@@ -19,7 +19,7 @@ Deno.serve(async (req: Request) => {
     const body = await req.json();
     const action = body?.action;
     const ip = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-    const ipHash = await sha256(ip + ":" + url);
+    const ipHash = await sha256(ip + ":" + serviceKey);
 
     if (action === "register") {
       const { deviceId, deviceSecret, pairingCode, status } = body;
@@ -30,7 +30,7 @@ Deno.serve(async (req: Request) => {
       if (existing && existing.device_secret_hash !== secretHash) return json({ error: "DEVICE_AUTH_FAILED" }, 401);
       const expiry = new Date(Date.now() + 10 * 60 * 1000).toISOString();
       const { error } = await db.from("volume_remote_devices").upsert({
-        device_id: deviceId, device_secret_hash: secretHash, pairing_code_hash: await sha256(pairingCode),
+        device_id: deviceId, device_secret_hash: secretHash, pairing_code_hash: await sha256("pairing:" + pairingCode + ":" + serviceKey),
         pairing_expires_at: expiry, last_seen_at: new Date().toISOString(), status: status && typeof status === "object" ? status : {},
       }, { onConflict: "device_id" });
       if (error) throw error;
@@ -47,7 +47,7 @@ Deno.serve(async (req: Request) => {
       if (countError) throw countError;
       if ((count ?? 0) > 8) return json({ error: "RATE_LIMITED" }, 429);
       const { data: device, error } = await db.from("volume_remote_devices").select("device_id")
-        .eq("pairing_code_hash", await sha256(code)).gt("pairing_expires_at", new Date().toISOString()).maybeSingle();
+        .eq("pairing_code_hash", await sha256("pairing:" + code + ":" + serviceKey)).gt("pairing_expires_at", new Date().toISOString()).maybeSingle();
       if (error) throw error;
       if (!device) return json({ error: "PAIRING_CODE_INVALID_OR_EXPIRED" }, 401);
       const controllerSecret = randomToken();
