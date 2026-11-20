@@ -48,4 +48,10 @@ kotlin {
     }
 }
 
+dependencies {
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+}
+
 flutter { source = "../.." }
+
+[executed on device: PC-van-Jake (1997e53f-651c-4a6a-959d-b2acccb4b133)]
