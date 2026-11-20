@@ -9,11 +9,15 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('Volume Controller starts successfully', (WidgetTester tester) async {
+  testWidgets('Volume Controller shows brightness and volume side by side', (WidgetTester tester) async {
     await tester.pumpWidget(const VolumeApp());
     await tester.pumpAndSettle();
 
     expect(find.text('Volume Controller'), findsOneWidget);
     expect(find.text('Niet verbonden'), findsOneWidget);
+    expect(find.text('HELDERHEID'), findsOneWidget);
+    expect(find.text('VOLUME'), findsOneWidget);
+    expect(find.byType(VerticalVolumeControl), findsNWidgets(2));
+    expect(find.text('Stand-by'), findsOneWidget);
   });
 }
