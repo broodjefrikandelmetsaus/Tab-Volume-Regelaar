@@ -507,6 +507,9 @@ class _ControllerPageState extends State<ControllerPage> {
   String pairingCode = '';
   String? cloudDeviceId;
   String? cloudControllerSecret;
+  String? pendingCloudCommand;
+  int? pendingCloudPercent;
+  Timer? cloudSendTimer;
   Color accent = defaultAccent;
   Timer? timer;
 
@@ -532,6 +535,7 @@ class _ControllerPageState extends State<ControllerPage> {
   @override
   void dispose() {
     timer?.cancel();
+    cloudSendTimer?.cancel();
     ip.dispose();
     pin.dispose();
     super.dispose();
@@ -684,12 +688,26 @@ class _ControllerPageState extends State<ControllerPage> {
     if (!connected) return;
     try {
       if (cloudDeviceId != null && cloudControllerSecret != null) {
-        await CloudRelay.sendCommand(
-          deviceId: cloudDeviceId!,
-          controllerSecret: cloudControllerSecret!,
-          command: isBrightness ? 'setBrightness' : 'set',
-          percent: next,
-        );
+        pendingCloudCommand = isBrightness ? 'setBrightness' : 'set';
+        pendingCloudPercent = next;
+        cloudSendTimer?.cancel();
+        cloudSendTimer = Timer(const Duration(milliseconds: 180), () async {
+          final command = pendingCloudCommand;
+          final value = pendingCloudPercent;
+          if (command == null || value == null || cloudDeviceId == null || cloudControllerSecret == null) return;
+          try {
+            await CloudRelay.sendCommand(
+              deviceId: cloudDeviceId!,
+              controllerSecret: cloudControllerSecret!,
+              command: command,
+              percent: value,
+            );
+          } catch (_) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cloudopdracht kon niet worden verstuurd.')));
+            }
+          }
+        });
         return;
       }
       final r = await sendCommand(ip.text.trim(), pin.text.trim(), isBrightness ? 'setBrightness' : 'set', next);
@@ -733,6 +751,9 @@ class _ControllerPageState extends State<ControllerPage> {
       ),
     );
     if (approved != true || !mounted) return;
+    cloudSendTimer?.cancel();
+    pendingCloudCommand = null;
+    pendingCloudPercent = null;
     try {
       if (cloudDeviceId != null && cloudControllerSecret != null) {
         await CloudRelay.sendCommand(deviceId: cloudDeviceId!, controllerSecret: cloudControllerSecret!, command: 'lock');
