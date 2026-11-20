@@ -3,11 +3,13 @@ package nl.jake.volume_remote
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSuggestion
@@ -17,6 +19,13 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.widget.TextView
+import android.widget.FrameLayout
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import android.util.Base64
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -39,7 +48,9 @@ class VolumeServerService : android.app.Service() {
     private val cloudPollAgain = AtomicBoolean(false)
     @Volatile private var realtimeSocket: SupabaseRealtimeSocket? = null
     private val channelId = "volume_receiver"
-    private val kidsChannelId = "volume_remote_actions"
+    @Volatile private var touchLocked = false
+    private var touchLockWindowManager: WindowManager? = null
+    private var touchLockOverlay: View? = null
     private var standbyWakeLock: PowerManager.WakeLock? = null
     private var standbyWifiLock: WifiManager.WifiLock? = null
 
@@ -49,6 +60,7 @@ class VolumeServerService : android.app.Service() {
         super.onCreate()
         liveInstance = this
         receiverUiForeground = desiredUiForeground
+        touchLocked = isTouchLocked()
         createNotificationChannels()
         startForeground(42, notification())
         running = true
@@ -57,6 +69,7 @@ class VolumeServerService : android.app.Service() {
         if (isStandby()) {
             setStandbyMode(true, schedule = false)
         }
+        if (touchLocked) mainHandler.post { applyTouchLockOnMain(true) }
         startRealtimeIfConfigured()
         scheduleCloudPolling(2500)
     }
@@ -66,9 +79,6 @@ class VolumeServerService : android.app.Service() {
             val nm = getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(
                 NotificationChannel(channelId, "Volume Receiver", NotificationManager.IMPORTANCE_LOW)
-            )
-            nm.createNotificationChannel(
-                NotificationChannel(kidsChannelId, "Volume Remote opdrachten", NotificationManager.IMPORTANCE_DEFAULT)
             )
         }
     }
@@ -110,6 +120,108 @@ class VolumeServerService : android.app.Service() {
 
     private fun isStandby(): Boolean =
         getSharedPreferences("volume_remote", Context.MODE_PRIVATE).getBoolean("standby", false)
+
+    private fun isTouchLocked(): Boolean =
+        getSharedPreferences("volume_remote", Context.MODE_PRIVATE).getBoolean("touch_locked", false)
+
+    /**
+     * A transparent full-screen overlay consumes taps while keeping the video
+     * visible and playing. It can only be removed by a trusted remote unlock
+     * command or by the app owner through the controller.
+     */
+    private fun setTouchLock(enabled: Boolean): Boolean {
+        if (Looper.myLooper() == Looper.getMainLooper()) return applyTouchLockOnMain(enabled)
+        val done = CountDownLatch(1)
+        var result = false
+        mainHandler.post {
+            result = applyTouchLockOnMain(enabled)
+            done.countDown()
+        }
+        return try {
+            done.await(2500L, TimeUnit.MILLISECONDS) && result
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+    }
+
+    private fun applyTouchLockOnMain(enabled: Boolean): Boolean {
+        if (!enabled) {
+            val manager = touchLockWindowManager
+            val overlay = touchLockOverlay
+            if (manager != null && overlay != null) {
+                try { manager.removeView(overlay) } catch (_: Exception) { }
+            }
+            touchLockWindowManager = null
+            touchLockOverlay = null
+            touchLocked = false
+            getSharedPreferences("volume_remote", Context.MODE_PRIVATE)
+                .edit().putBoolean("touch_locked", false).apply()
+            return true
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) return false
+        if (touchLockOverlay != null) {
+            touchLocked = true
+            return true
+        }
+
+        return try {
+            val manager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            val root = FrameLayout(this).apply {
+                setBackgroundColor(Color.TRANSPARENT)
+                isClickable = true
+                isFocusable = false
+                setOnTouchListener { _, _ -> true }
+            }
+            val label = TextView(this).apply {
+                text = "🔒  KIJKVERGRENDELING ACTIEF"
+                textSize = 13f
+                setTextColor(Color.WHITE)
+                setPadding(dp(16), dp(10), dp(16), dp(10))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(22).toFloat()
+                    setColor(0xDD182230.toInt())
+                    setStroke(dp(1), 0xAAFFFFFF.toInt())
+                }
+                isClickable = false
+                setOnTouchListener { _, _ -> true }
+            }
+            root.addView(
+                label,
+                FrameLayout.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                ).apply { topMargin = dp(28) }
+            )
+            val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            }
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                overlayType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            )
+            manager.addView(root, params)
+            touchLockWindowManager = manager
+            touchLockOverlay = root
+            touchLocked = true
+            getSharedPreferences("volume_remote", Context.MODE_PRIVATE)
+                .edit().putBoolean("touch_locked", true).apply()
+            true
+        } catch (_: Exception) {
+            touchLocked = false
+            false
+        }
+    }
 
     private fun setStandbyMode(enabled: Boolean, schedule: Boolean = true) {
         getSharedPreferences("volume_remote", Context.MODE_PRIVATE)
@@ -264,7 +376,9 @@ class VolumeServerService : android.app.Service() {
                                 if (lockAdminActive()) lockDevice() else handled = false
                             }
                             "wake" -> wakeDisplayKeepPreviousApp()
-                            "openKids" -> postOpenKidsNotification()
+                            "openKids" -> handled = openKidsFromService()
+                            "screenLock" -> handled = setTouchLock(true)
+                            "screenUnlock" -> handled = setTouchLock(false)
                             else -> handled = false
                         }
 
@@ -328,6 +442,8 @@ class VolumeServerService : android.app.Service() {
             .put("standby", isStandby())
             .put("secureLockScreen", keyguard.isDeviceSecure)
             .put("batteryOptimizationIgnored", power.isIgnoringBatteryOptimizations(packageName))
+            .put("canOpenKidsInBackground", Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this))
+            .put("touchLocked", touchLocked)
     }
 
     private fun postCloud(body: JSONObject): JSONObject {
@@ -382,28 +498,107 @@ class VolumeServerService : android.app.Service() {
         } catch (_: Exception) { false }
     }
 
-    private fun postOpenKidsNotification() {
-        try {
-            val launch = packageManager.getLaunchIntentForPackage("com.google.android.apps.youtube.kids")
-                ?: Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://play.google.com/store/apps/details?id=com.google.android.apps.youtube.kids"))
-            val pending = PendingIntent.getActivity(
-                this,
-                7731,
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, kidsChannelId) else Notification.Builder(this)
-            val notification = builder
-                .setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentTitle("YouTube Kids openen")
-                .setContentText("Tik hier om YouTube Kids op deze tablet te openen.")
-                .setContentIntent(pending)
-                .setAutoCancel(true)
-                .setPriority(Notification.PRIORITY_DEFAULT)
-                .build()
-            getSystemService(NotificationManager::class.java).notify(7731, notification)
-        } catch (_: Exception) { }
+    /**
+     * Opens YouTube Kids when Receiver is behind another app.
+     * Android 15+ requires a user-approved, actually visible overlay for this
+     * background activity launch. A tiny play badge is shown only briefly
+     * during the hand-off; no separate YouTube Kids notification is posted.
+     */
+    private fun openKidsFromService(): Boolean {
+        val finished = CountDownLatch(1)
+        var launched = false
+
+        mainHandler.post {
+            var overlayWindow: WindowManager? = null
+            var overlayView: View? = null
+            try {
+                val launch = packageManager.getLaunchIntentForPackage("com.google.android.apps.youtube.kids")
+                if (launch == null) {
+                    finished.countDown()
+                    return@post
+                }
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+
+                if (!receiverUiForeground) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                        finished.countDown()
+                        return@post
+                    }
+
+                    overlayWindow = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+                    val badge = TextView(this).apply {
+                        text = "▶"
+                        textSize = 15f
+                        setTextColor(Color.WHITE)
+                        gravity = Gravity.CENTER
+                        contentDescription = "YouTube Kids wordt geopend"
+                        background = GradientDrawable().apply {
+                            shape = GradientDrawable.OVAL
+                            setColor(Color.rgb(229, 44, 64))
+                            setStroke(dp(1), Color.WHITE)
+                        }
+                    }
+                    val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    } else {
+                        @Suppress("DEPRECATION")
+                        WindowManager.LayoutParams.TYPE_PHONE
+                    }
+                    val params = WindowManager.LayoutParams(
+                        dp(38),
+                        dp(38),
+                        overlayType,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT
+                    ).apply {
+                        gravity = Gravity.TOP or Gravity.END
+                        x = dp(10)
+                        y = dp(72)
+                    }
+                    overlayWindow.addView(badge, params)
+                    overlayView = badge
+                }
+
+                val launchNow = Runnable {
+                    try {
+                        startActivity(launch)
+                        launched = true
+                    } catch (_: Exception) {
+                        launched = false
+                    } finally {
+                        val wm = overlayWindow
+                        val view = overlayView
+                        if (wm != null && view != null) {
+                            mainHandler.postDelayed({
+                                try { wm.removeView(view) } catch (_: Exception) { }
+                            }, 450L)
+                        }
+                        finished.countDown()
+                    }
+                }
+
+                if (overlayView != null) mainHandler.postDelayed(launchNow, 180L)
+                else launchNow.run()
+            } catch (_: Exception) {
+                try {
+                    if (overlayWindow != null && overlayView != null) overlayWindow?.removeView(overlayView)
+                } catch (_: Exception) { }
+                finished.countDown()
+            }
+        }
+
+        return try {
+            finished.await(2500L, TimeUnit.MILLISECONDS) && launched
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
     }
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt().coerceAtLeast(1)
 
     private fun serve() {
         try {
@@ -449,8 +644,18 @@ class VolumeServerService : android.app.Service() {
                             wakeAfterResponse = true
                         }
                         "openKids" -> {
-                            out.put("ok", true).put("message", "OPEN_KIDS")
-                            openKidsAfterResponse = true
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this) && !receiverUiForeground) {
+                                out.put("ok", false).put("error", "OVERLAY_PERMISSION_REQUIRED")
+                            } else {
+                                out.put("ok", true).put("message", "OPEN_KIDS")
+                                openKidsAfterResponse = true
+                            }
+                        }
+                        "screenLock" -> {
+                            if (!setTouchLock(true)) out.put("ok", false).put("error", "OVERLAY_PERMISSION_REQUIRED")
+                        }
+                        "screenUnlock" -> {
+                            if (!setTouchLock(false)) out.put("ok", false).put("error", "SCREEN_UNLOCK_FAILED")
                         }
                     }
 
@@ -467,24 +672,14 @@ class VolumeServerService : android.app.Service() {
                     out.put("standby", isStandby())
                     out.put("secureLockScreen", getSystemService(android.app.KeyguardManager::class.java).isDeviceSecure)
                     out.put("batteryOptimizationIgnored", getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName))
+                    out.put("canOpenKidsInBackground", Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this))
+                    out.put("touchLocked", touchLocked)
                 }
 
                 s.getOutputStream().bufferedWriter().apply { write(out.toString()); newLine(); flush() }
                 if (lockAfterResponse) lockDevice()
                 if (wakeAfterResponse) wakeDisplayKeepPreviousApp()
-                if (openKidsAfterResponse) {
-                    if (receiverUiForeground) {
-                        val intent = packageManager.getLaunchIntentForPackage("com.google.android.apps.youtube.kids")
-                        if (intent != null) {
-                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            startActivity(intent)
-                        } else {
-                            postOpenKidsNotification()
-                        }
-                    } else {
-                        postOpenKidsNotification()
-                    }
-                }
+                if (openKidsAfterResponse) openKidsFromService()
             } catch (_: Exception) { }
         }
     }
@@ -497,6 +692,13 @@ class VolumeServerService : android.app.Service() {
         mainHandler.removeCallbacks(cloudPollRunnable)
         realtimeSocket?.close()
         realtimeSocket = null
+        try {
+            val manager = touchLockWindowManager
+            val overlay = touchLockOverlay
+            if (manager != null && overlay != null) manager.removeView(overlay)
+        } catch (_: Exception) { }
+        touchLockWindowManager = null
+        touchLockOverlay = null
         releaseStandbyLocks()
         try { server?.close() } catch (_: Exception) { }
         super.onDestroy()
@@ -519,6 +721,10 @@ class VolumeServerService : android.app.Service() {
         fun onCloudCredentialsUpdated() {
             liveInstance?.onCloudCredentialsUpdated()
         }
+
+        fun isTouchLocked(context: Context): Boolean =
+            context.getSharedPreferences("volume_remote", Context.MODE_PRIVATE)
+                .getBoolean("touch_locked", false)
 
         fun currentPin(context: Context): String {
             val prefs = context.getSharedPreferences("volume_remote", Context.MODE_PRIVATE)
@@ -552,5 +758,3 @@ class VolumeServerService : android.app.Service() {
         }
     }
 }
-
-[executed on device: PC-van-Jake (1997e53f-651c-4a6a-959d-b2acccb4b133)]
