@@ -61,6 +61,10 @@ class VolumeServerService : android.app.Service() {
         liveInstance = this
         receiverUiForeground = desiredUiForeground
         touchLocked = isTouchLocked()
+        if (touchLocked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            touchLocked = false
+            getSharedPreferences("volume_remote", Context.MODE_PRIVATE).edit().putBoolean("touch_locked", false).apply()
+        }
         createNotificationChannels()
         startForeground(42, notification())
         running = true
@@ -168,11 +172,15 @@ class VolumeServerService : android.app.Service() {
 
         return try {
             val manager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-            val root = FrameLayout(this).apply {
+            val root = object : FrameLayout(this) {
+                override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean = true
+                override fun onTouchEvent(event: android.view.MotionEvent): Boolean = true
+            }.apply {
                 setBackgroundColor(Color.TRANSPARENT)
                 isClickable = true
+                isLongClickable = true
                 isFocusable = false
-                setOnTouchListener { _, _ -> true }
+                contentDescription = "Kijkvergrendeling actief. Aanraken is geblokkeerd."
             }
             val label = TextView(this).apply {
                 text = "🔒  KIJKVERGRENDELING ACTIEF"
@@ -206,10 +214,12 @@ class VolumeServerService : android.app.Service() {
                 WindowManager.LayoutParams.MATCH_PARENT,
                 overlayType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT
-            )
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                alpha = 1.0f
+            }
             manager.addView(root, params)
             touchLockWindowManager = manager
             touchLockOverlay = root
@@ -219,6 +229,8 @@ class VolumeServerService : android.app.Service() {
             true
         } catch (_: Exception) {
             touchLocked = false
+            getSharedPreferences("volume_remote", Context.MODE_PRIVATE)
+                .edit().putBoolean("touch_locked", false).apply()
             false
         }
     }
@@ -441,7 +453,6 @@ class VolumeServerService : android.app.Service() {
             .put("lockAdminActive", dpm.isAdminActive(admin))
             .put("standby", isStandby())
             .put("secureLockScreen", keyguard.isDeviceSecure)
-            .put("batteryOptimizationIgnored", power.isIgnoringBatteryOptimizations(packageName))
             .put("canOpenKidsInBackground", Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this))
             .put("touchLocked", touchLocked)
     }
@@ -758,3 +769,5 @@ class VolumeServerService : android.app.Service() {
         }
     }
 }
+
+[executed on device: PC-van-Jake (1997e53f-651c-4a6a-959d-b2acccb4b133)]
