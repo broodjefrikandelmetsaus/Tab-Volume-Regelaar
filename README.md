@@ -35,3 +35,11 @@ flutter build apk --release --flavor controller --dart-define=APP_ROLE=controlle
 BELANGRIJK: geef bij elke build expliciet APP_ROLE mee. Zonder deze define valt de app terug op de standaardrol Controller, waardoor de Receiver ook het Controller-scherm kan tonen.
 
 Cloudfunctie: volume-remote v10. De cloudlimiet die opdrachten binnen 100 ms blokkeerde is verwijderd; de bestaande pending-command-samenvoeging voor volume en helderheid blijft actief. De cloudfunctie accepteert nu ook de opdracht `wake`.
+
+
+## Update 9 (1.0.8+9)
+- Verwijdert de aparte aanvraag om Android-batterijoptimalisatie uit te schakelen.
+- Versterkt de kijkvergrendeling met een full-screen overlay die aanrakingen binnen het scherm opvangt.
+- Herstelt opgeslagen kijkvergrendeling alleen wanneer de overlay-toestemming nog beschikbaar is.
+- De Controller wacht bij cloudbediening op bevestiging van de Receiver voordat de status wordt aangepast.
+- De Receiver- en Controller-APK zijn afzonderlijk gebouwd als verschillende Android-apps.
