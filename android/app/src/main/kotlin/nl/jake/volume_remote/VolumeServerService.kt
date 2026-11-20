@@ -124,45 +124,14 @@ class VolumeServerService : android.app.Service() {
     }
 
     private fun acquireStandbyLocks() {
-        try {
-            val power = getSystemService(PowerManager::class.java)
-            if (standbyWakeLock == null || standbyWakeLock?.isHeld != true) {
-                standbyWakeLock = power.newWakeLock(
-                    PowerManager.PARTIAL_WAKE_LOCK,
-                    "$packageName:standby-cloud-listener"
-                ).apply {
-                    setReferenceCounted(false)
-                    acquire()
-                }
-            }
-        } catch (_: Exception) { }
-
-        try {
-            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            if (standbyWifiLock == null || standbyWifiLock?.isHeld != true) {
-                val mode = if (Build.VERSION.SDK_INT >= 29) {
-                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-                } else {
-                    @Suppress("DEPRECATION")
-                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
-                }
-                standbyWifiLock = wifi.createWifiLock(mode, "$packageName:standby-cloud-wifi").apply {
-                    setReferenceCounted(false)
-                    acquire()
-                }
-            }
-        } catch (_: Exception) { }
+        // Battery saver: no permanent partial wake lock or Wi-Fi lock.
+        // pollCloudInBackground() acquires a short CPU lock only while doing
+        // an actual network request.
     }
 
     private fun releaseStandbyLocks() {
-        try {
-            standbyWakeLock?.let { if (it.isHeld) it.release() }
-        } catch (_: Exception) { }
-        standbyWakeLock = null
-        try {
-            standbyWifiLock?.let { if (it.isHeld) it.release() }
-        } catch (_: Exception) { }
-        standbyWifiLock = null
+        // Kept as a separate method so standby state transitions stay simple.
+        // There are no long-lived locks to release.
     }
 
     private fun lockDevice() {
@@ -226,8 +195,16 @@ class VolumeServerService : android.app.Service() {
         if (!running || receiverUiForeground || !cloudPollBusy.compareAndSet(false, true)) return
 
         Thread {
+            var pollWakeLock: PowerManager.WakeLock? = null
             try {
                 val power = getSystemService(PowerManager::class.java)
+                pollWakeLock = power.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "$packageName:short-cloud-poll"
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire(12_000L)
+                }
                 val keyguard = getSystemService(android.app.KeyguardManager::class.java)
                 if (isStandby() && power.isInteractive && !keyguard.isKeyguardLocked) {
                     // A local power-button wake/unlock also ends our standby battery mode.
@@ -284,8 +261,11 @@ class VolumeServerService : android.app.Service() {
             } catch (_: Exception) {
                 // Leave credentials and queued commands untouched; retry on the next interval.
             } finally {
+                try {
+                    pollWakeLock?.let { if (it.isHeld) it.release() }
+                } catch (_: Exception) { }
                 cloudPollBusy.set(false)
-                val delay = if (isStandby()) 6000L else 12000L
+                val delay = if (isStandby()) 45000L else 60000L
                 scheduleCloudPolling(delay)
             }
         }.start()
