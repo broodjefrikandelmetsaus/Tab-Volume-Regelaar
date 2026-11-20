@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -275,6 +275,16 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
           final action = item['action']?.toString() ?? '';
           final percent = (item['percent'] as num?)?.toInt();
           if (id == null) continue;
+          if (action == 'wifi') {
+            final payload = item['payload'];
+            if (payload is! Map) continue;
+            await native.invokeMethod('addWifiSuggestion', {
+              'ssid': payload['ssid']?.toString() ?? '',
+              'password': payload['password']?.toString() ?? '',
+            });
+            await CloudRelay.acknowledge(deviceId: cloudDeviceId!, deviceSecret: cloudDeviceSecret!, commandId: id);
+            continue;
+          }
           final result = await sendCommand('127.0.0.1', (await native.invokeMethod('getReceiverInfo'))['pin'].toString(), action, percent);
           if (result['ok'] == true) {
             await CloudRelay.acknowledge(deviceId: cloudDeviceId!, deviceSecret: cloudDeviceSecret!, commandId: id);
@@ -326,6 +336,16 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
     }
   }
 
+  Future<void> requestWifiPermission() async {
+    try {
+      await native.invokeMethod('requestWifiPermission');
+      await Future.delayed(const Duration(milliseconds: 700));
+      await refresh();
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
+    }
+  }
+
   Future<void> openWifiSettings() async {
     try {
       await native.invokeMethod('openWifiSettings');
@@ -374,6 +394,7 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
   Widget build(BuildContext context) {
     final canWriteBrightness = info['canWriteBrightness'] == true;
     final lockAdminActive = info['lockAdminActive'] == true;
+    final wifiPermissionGranted = info['wifiPermissionGranted'] == true;
     final kidsInstalled = info['youtubeKidsInstalled'] == true;
 
     return Scaffold(
@@ -456,10 +477,17 @@ class _ReceiverPageState extends State<ReceiverPage> with WidgetsBindingObserver
                 ),
                 permissionTile(
                   icon: Icons.lock_rounded,
-                  title: 'Scherm op afstand vergrendelen',
+                  title: 'Stand-by op afstand',
                   subtitle: lockAdminActive ? 'Toegestaan' : 'Eenmalig bevestigen in Android',
                   enabled: lockAdminActive,
                   onPressed: requestLockAdmin,
+                ),
+                permissionTile(
+                  icon: Icons.wifi_rounded,
+                  title: 'Wifi instellen op afstand',
+                  subtitle: wifiPermissionGranted ? 'Toegestaan' : 'Eenmalig toestaan voor wifi-netwerken toevoegen',
+                  enabled: wifiPermissionGranted,
+                  onPressed: requestWifiPermission,
                 ),
                 const SizedBox(height: 16),
                 OutlinedButton.icon(
@@ -501,7 +529,6 @@ class _ControllerPageState extends State<ControllerPage> {
   bool busy = false;
   int percent = 0;
   int brightnessPercent = 50;
-  String selectedControl = 'volume';
   bool canWriteBrightness = false;
   bool lockAdminActive = false;
   String pairingCode = '';
@@ -671,9 +698,8 @@ class _ControllerPageState extends State<ControllerPage> {
     }
   }
 
-  Future<void> change(int value) async {
+  Future<void> change(int value, {required bool isBrightness}) async {
     final next = value.clamp(0, 100).toInt();
-    final isBrightness = selectedControl == 'brightness';
     if (isBrightness && !canWriteBrightness) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Geef eerst op de tablet toestemming voor helderheidsaanpassing.')));
       return;
@@ -730,6 +756,23 @@ class _ControllerPageState extends State<ControllerPage> {
     }
   }
 
+  Future<void> _openWifiHelper() async {
+    if (cloudDeviceId == null || cloudControllerSecret == null || !connected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Koppel de tablet eerst via de internet-koppelcode om wifi op afstand in te stellen.')),
+      );
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => WifiRemotePage(
+          deviceId: cloudDeviceId!,
+          controllerSecret: cloudControllerSecret!,
+        ),
+      ),
+    );
+  }
+
   Future<void> _confirmLock() async {
     if (!connected) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('De tablet is niet verbonden.')));
@@ -742,11 +785,11 @@ class _ControllerPageState extends State<ControllerPage> {
     final approved = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Tablet vergrendelen?'),
-        content: const Text('Weet je het zeker? Het scherm van de tablet gaat uit en wordt vergrendeld. Je moet de tablet daarna weer ontgrendelen.'),
+        title: const Text('Tablet in stand-by zetten?'),
+        content: const Text('Weet je het zeker? De tablet gaat in stand-by: het scherm gaat uit en wordt vergrendeld, net als wanneer je één keer op de fysieke aan/uit-knop drukt.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Annuleren')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Ja, vergrendelen')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Ja, stand-by')),
         ],
       ),
     );
@@ -778,12 +821,56 @@ class _ControllerPageState extends State<ControllerPage> {
     }
   }
 
+  Widget _controlCard({
+    required String title,
+    required int value,
+    required IconData icon,
+    required bool isBrightness,
+    required String status,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
+      decoration: BoxDecoration(
+        color: panelBackground,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Colors.white.withOpacity(.06)),
+      ),
+      child: Column(children: [
+        Text(title, textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 10, letterSpacing: 1.0, color: Colors.white.withOpacity(.62), fontWeight: FontWeight.w800)),
+        const SizedBox(height: 10),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text('$value%', style: TextStyle(fontSize: 39, height: 1, fontWeight: FontWeight.w800, color: accent)),
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: LayoutBuilder(builder: (context, constraints) {
+            final sliderHeight = math.min(330.0, math.max(165.0, constraints.maxHeight - 12));
+            return Center(
+              child: VerticalVolumeControl(
+                height: sliderHeight,
+                value: value,
+                accent: accent,
+                icon: icon,
+                onChanged: (next) => change(next, isBrightness: isBrightness),
+              ),
+            );
+          }),
+        ),
+        const SizedBox(height: 7),
+        Text(status, textAlign: TextAlign.center, maxLines: 2,
+          style: TextStyle(fontSize: 10, height: 1.25, color: Colors.white.withOpacity(.52))),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isBrightness = selectedControl == 'brightness';
-    final activeValue = isBrightness ? brightnessPercent : percent;
-    final activeTitle = isBrightness ? 'SCHERMHELDERHEID' : 'MEDIA VOLUME';
-    final activeIcon = isBrightness ? Icons.brightness_6_rounded : Icons.volume_up_rounded;
+    final brightnessStatus = !canWriteBrightness
+        ? 'Toestemming nodig op tablet'
+        : (!connected ? 'Wacht op verbinding' : 'Live geregeld');
+    final volumeStatus = connected ? 'Live geregeld' : 'Wacht op verbinding';
 
     return Scaffold(
       backgroundColor: pageBackground,
@@ -793,6 +880,13 @@ class _ControllerPageState extends State<ControllerPage> {
         titleSpacing: 22,
         title: const Text('Volume Controller', style: TextStyle(fontWeight: FontWeight.w700, letterSpacing: .2)),
         actions: [
+          IconButton(
+            tooltip: 'Wifi instellen op tablet',
+            onPressed: busy ? null : _openWifiHelper,
+            icon: const Icon(Icons.wifi_rounded),
+            style: IconButton.styleFrom(backgroundColor: panelBackground, foregroundColor: Colors.white),
+          ),
+          const SizedBox(width: 8),
           IconButton(
             tooltip: 'Instellingen',
             onPressed: busy ? null : _openSettings,
@@ -805,10 +899,10 @@ class _ControllerPageState extends State<ControllerPage> {
       body: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(22, 14, 22, 18),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
           child: Column(children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
+              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
               decoration: BoxDecoration(
                 color: panelBackground,
                 borderRadius: BorderRadius.circular(30),
@@ -828,80 +922,225 @@ class _ControllerPageState extends State<ControllerPage> {
                 Text(connected ? 'Verbonden' : 'Niet verbonden', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               ]),
             ),
-            const SizedBox(height: 18),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment<String>(value: 'volume', label: Text('Volume'), icon: Icon(Icons.volume_up_rounded)),
-                ButtonSegment<String>(value: 'brightness', label: Text('Helderheid'), icon: Icon(Icons.brightness_6_rounded)),
-              ],
-              selected: {selectedControl},
-              showSelectedIcon: false,
-              onSelectionChanged: (selection) => setState(() => selectedControl = selection.first),
-            ),
             const SizedBox(height: 12),
             Expanded(
-              child: LayoutBuilder(builder: (context, constraints) {
-                final sliderHeight = math.min(390.0, math.max(180.0, constraints.maxHeight - 64));
-                return Center(
-                  child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.center, children: [
-                    Column(mainAxisSize: MainAxisSize.min, children: [
-                      Text('100', style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(.5), fontWeight: FontWeight.w600)),
-                      const SizedBox(height: 8),
-                      VerticalVolumeControl(height: sliderHeight, value: activeValue, accent: accent, icon: activeIcon, onChanged: change),
-                      const SizedBox(height: 8),
-                      Text('0', style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(.5), fontWeight: FontWeight.w600)),
-                    ]),
-                    const SizedBox(width: 34),
-                    SizedBox(
-                      width: 132,
-                      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(activeTitle, style: TextStyle(fontSize: 10, letterSpacing: 1.5, color: Colors.white.withOpacity(.45), fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 8),
-                        FittedBox(
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.centerLeft,
-                          child: Text('$activeValue%', style: TextStyle(fontSize: 58, height: 1, fontWeight: FontWeight.w800, letterSpacing: -2, color: accent)),
-                        ),
-                        const SizedBox(height: 12),
-                        Container(width: 42, height: 3, decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(4))),
-                        const SizedBox(height: 12),
-                        Text(
-                          !connected ? 'Wacht op verbinding' : (isBrightness && !canWriteBrightness ? 'Toestemming nodig op tablet' : 'Live geregeld'),
-                          style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(.55)),
-                        ),
-                      ]),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: _controlCard(
+                      title: 'HELDERHEID',
+                      value: brightnessPercent,
+                      icon: Icons.brightness_6_rounded,
+                      isBrightness: true,
+                      status: brightnessStatus,
                     ),
-                  ]),
-                );
-              }),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _controlCard(
+                      title: 'VOLUME',
+                      value: percent,
+                      icon: Icons.volume_up_rounded,
+                      isBrightness: false,
+                      status: volumeStatus,
+                    ),
+                  ),
+                ],
+              ),
             ),
+            const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
                 onPressed: connected ? _confirmLock : null,
                 icon: const Icon(Icons.power_settings_new_rounded),
-                label: const Text('Tablet vergrendelen / scherm uit'),
+                label: const Text('Stand-by'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFFFF7B82),
                   side: BorderSide(color: const Color(0xFFFF626D).withOpacity(.55)),
-                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 7),
             Text(
-              isBrightness && !canWriteBrightness
-                  ? 'Geef eerst op de tablet toestemming voor helderheidsaanpassing'
-                  : 'Sleep omhoog of omlaag om ${isBrightness ? 'de helderheid' : 'het volume'} aan te passen',
+              !connected
+                  ? 'Verbind de tablet via Instellingen om te beginnen'
+                  : (!canWriteBrightness
+                      ? 'Geef op de tablet nog toestemming voor helderheid'
+                      : 'Sleep beide regelaars afzonderlijk omhoog of omlaag'),
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(.42)),
+              style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(.45)),
             ),
-            const SizedBox(height: 5),
           ]),
         ),
       ),
     );
   }
+}
+
+class WifiRemotePage extends StatefulWidget {
+  const WifiRemotePage({super.key, required this.deviceId, required this.controllerSecret});
+  final String deviceId;
+  final String controllerSecret;
+
+  @override
+  State<WifiRemotePage> createState() => _WifiRemotePageState();
+}
+
+class _WifiRemotePageState extends State<WifiRemotePage> {
+  final ssidController = TextEditingController();
+  final passwordController = TextEditingController();
+  List<String> networks = [];
+  bool scanning = false;
+  bool sending = false;
+  String scanMessage = '';
+
+  @override
+  void initState() {
+    super.initState();
+    scanNetworks();
+  }
+
+  @override
+  void dispose() {
+    ssidController.dispose();
+    passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> scanNetworks() async {
+    setState(() {
+      scanning = true;
+      scanMessage = '';
+    });
+    try {
+      final raw = await native.invokeMethod<List<dynamic>>('scanWifiNetworks');
+      final found = (raw ?? [])
+          .map((item) => item is Map ? item['ssid']?.toString() ?? '' : item.toString())
+          .where((name) => name.trim().isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort();
+      if (!mounted) return;
+      setState(() {
+        networks = found;
+        if (ssidController.text.trim().isEmpty && found.isNotEmpty) {
+          ssidController.text = found.first;
+        }
+        scanMessage = found.isEmpty
+            ? 'Geen netwerken gevonden. Vul de netwerknaam hieronder handmatig in.'
+            : found.length.toString() + ' netwerken gevonden op je telefoon.';
+      });
+    } catch (e) {
+      if (mounted) setState(() => scanMessage = 'Wifi scannen lukte niet: $e. Vul de netwerknaam handmatig in.');
+    } finally {
+      if (mounted) setState(() => scanning = false);
+    }
+  }
+
+  Future<void> sendWifi() async {
+    final ssid = ssidController.text.trim();
+    final password = passwordController.text;
+    if (ssid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Vul eerst een netwerknaam in.')));
+      return;
+    }
+    if (password.isNotEmpty && (password.length < 8 || password.length > 63)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Een wifi-wachtwoord moet 8 tot 63 tekens zijn, of leeg bij een open netwerk.')));
+      return;
+    }
+    setState(() => sending = true);
+    try {
+      await CloudRelay.sendCommand(
+        deviceId: widget.deviceId,
+        controllerSecret: widget.controllerSecret,
+        command: 'wifi',
+        payload: {'ssid': ssid, 'password': password},
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Wifi-netwerk naar de tablet verstuurd. Android kan op de tablet nog om goedkeuring vragen.')),
+      );
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Wifi versturen mislukt: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: pageBackground,
+    appBar: AppBar(title: const Text('Wifi instellen op tablet')),
+    body: ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const Text('Kies het wifi-netwerk dat de tablet moet gebruiken. De lijst wordt op je telefoon gescand.'),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: Text(scanMessage, style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(.6)))),
+          IconButton(
+            tooltip: 'Opnieuw scannen',
+            onPressed: scanning ? null : scanNetworks,
+            icon: scanning
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.refresh_rounded),
+          ),
+        ]),
+        if (networks.isNotEmpty)
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: networks.take(14).map((name) => ChoiceChip(
+              label: Text(name, overflow: TextOverflow.ellipsis),
+              selected: ssidController.text == name,
+              onSelected: (_) => setState(() => ssidController.text = name),
+            )).toList(),
+          ),
+        const SizedBox(height: 18),
+        TextField(
+          controller: ssidController,
+          decoration: const InputDecoration(
+            labelText: 'Wifi-netwerknaam (SSID)',
+            prefixIcon: Icon(Icons.wifi_rounded),
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 14),
+        TextField(
+          controller: passwordController,
+          obscureText: true,
+          decoration: const InputDecoration(
+            labelText: 'Wifi-wachtwoord',
+            helperText: 'Leeg laten bij een open netwerk',
+            prefixIcon: Icon(Icons.lock_outline_rounded),
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 22),
+        SizedBox(
+          height: 52,
+          child: FilledButton.icon(
+            onPressed: sending ? null : sendWifi,
+            icon: sending
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.send_rounded),
+            label: const Text('Naar tablet versturen'),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'De tablet moet online zijn om het verzoek te ontvangen. Android kan een eenmalige melding tonen waarmee je het toevoegen van het netwerk bevestigt. Dit werkt met wifi-netwerksuggesties op Android 10 of nieuwer.',
+          style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(.55)),
+        ),
+      ],
+    ),
+  );
 }
 
 class VerticalVolumeControl extends StatelessWidget {
