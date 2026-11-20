@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -686,10 +686,10 @@ class _ReceiverPageState extends State<ReceiverPage>
                   ),
                   permissionTile(
                     icon: Icons.open_in_new_rounded,
-                    title: 'YouTube Kids automatisch openen',
+                    title: 'Over andere apps weergeven',
                     subtitle: kidsBackgroundAllowed
                         ? 'Toegestaan Ã¢â‚¬Â¢ opent ook als Receiver op de achtergrond staat'
-                        : 'Eenmalig toestaan via Android: over andere apps weergeven',
+                        : 'Eenmalig toestaan via Android-instellingen',
                     enabled: kidsBackgroundAllowed,
                     onPressed: requestKidsBackgroundPermission,
                   ),
@@ -1361,18 +1361,18 @@ class _ControllerPageState extends State<ControllerPage>
       );
       return;
     }
-    if (!canOpenKidsInBackground) {
+    final desired = !touchLocked;
+    if (desired && !canOpenKidsInBackground) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Geef op de tablet bij Volume Receiver toestemming voor ?Weergeven over andere apps?. Dit is nodig om aanrakingen te blokkeren.',
+            'Geef op de tablet bij Volume Receiver toestemming voor Weergeven over andere apps. Dit is nodig om aanrakingen te blokkeren.',
           ),
         ),
       );
       return;
     }
 
-    final desired = !touchLocked;
     final command = desired ? 'screenLock' : 'screenUnlock';
     try {
       if (cloudDeviceId != null && cloudControllerSecret != null) {
