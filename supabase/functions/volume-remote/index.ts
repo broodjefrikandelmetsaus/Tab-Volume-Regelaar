@@ -68,7 +68,7 @@ Deno.serve(async (req: Request) => {
         if (action === "ack") {
           const id = Number(body.commandId);
           if (!Number.isSafeInteger(id) || id <= 0) return json({ error: "INVALID_COMMAND_ID" }, 400);
-          const { error: ackError } = await db.from("volume_remote_commands").update({ delivered_at: new Date().toISOString() }).eq("id", id).eq("device_id", deviceId).is("delivered_at", null);
+          const { error: ackError } = await db.from("volume_remote_commands").update({ delivered_at: new Date().toISOString(), payload: null }).eq("id", id).eq("device_id", deviceId).is("delivered_at", null);
           if (ackError) throw ackError;
           return json({ ok: true });
         }
@@ -76,7 +76,7 @@ Deno.serve(async (req: Request) => {
         if (body.status && typeof body.status === "object") update.status = body.status;
         const { error: updateError } = await db.from("volume_remote_devices").update(update).eq("device_id", deviceId);
         if (updateError) throw updateError;
-        const { data: commands, error: commandError } = await db.from("volume_remote_commands").select("id, action, percent")
+        const { data: commands, error: commandError } = await db.from("volume_remote_commands").select("id, action, percent, payload")
           .eq("device_id", deviceId).is("delivered_at", null).order("id", { ascending: true }).limit(5);
         if (commandError) throw commandError;
         return json({ ok: true, commands: commands ?? [] });
@@ -95,13 +95,32 @@ Deno.serve(async (req: Request) => {
 
       const command = body?.command;
       const percent = body?.percent;
-      if (!["set", "setBrightness", "lock"].includes(command) || (command !== "lock" && (!Number.isInteger(percent) || percent < 0 || percent > 100))) return json({ error: "INVALID_COMMAND" }, 400);
+      const payload = body?.payload;
+      if (!["set", "setBrightness", "lock", "wifi"].includes(command) ||
+          (command !== "lock" && command !== "wifi" && (!Number.isInteger(percent) || percent < 0 || percent > 100))) {
+        return json({ error: "INVALID_COMMAND" }, 400);
+      }
+      if (command === "wifi") {
+        const ssid = payload?.ssid;
+        const password = payload?.password;
+        if (typeof ssid !== "string" || ssid.trim().length < 1 || ssid.length > 32 ||
+            typeof password !== "string" || password.length > 63 ||
+            (password.length > 0 && password.length < 8)) {
+          return json({ error: "INVALID_WIFI_DETAILS" }, 400);
+        }
+      }
       const { data: recent, error: recentError } = await db.from("volume_remote_commands").select("id").eq("device_id", deviceId)
         .gte("created_at", new Date(Date.now() - 100).toISOString()).limit(1);
       if (recentError) throw recentError;
       if (recent?.length) return json({ error: "COMMAND_THROTTLED" }, 429);
 
-      if (command === "lock") {
+      if (command === "wifi") {
+        const wifiPayload = { ssid: payload.ssid.trim(), password: payload.password };
+        const { error: insertError } = await db.from("volume_remote_commands").insert({
+          device_id: deviceId, action: command, percent: null, payload: wifiPayload
+        });
+        if (insertError) throw insertError;
+      } else if (command === "lock") {
         const { error: insertError } = await db.from("volume_remote_commands").insert({ device_id: deviceId, action: command, percent: null });
         if (insertError) throw insertError;
       } else {
