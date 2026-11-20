@@ -1,5 +1,5 @@
 TAB VOLUME REGELAAR
-Versie 1.0.6 (build 7)
+Versie 1.0.7 (build 8)
 
 Twee Android-apps:
 - Volume Receiver op de tablet.
@@ -29,7 +29,9 @@ EENMALIGE INSTELLINGEN
 BOUWEN
 flutter pub get
 flutter test
-flutter build apk --release --flavor receiver
-flutter build apk --release --flavor controller
+flutter build apk --release --flavor receiver --dart-define=APP_ROLE=receiver
+flutter build apk --release --flavor controller --dart-define=APP_ROLE=controller
+
+BELANGRIJK: geef bij elke build expliciet APP_ROLE mee. Zonder deze define valt de app terug op de standaardrol Controller, waardoor de Receiver ook het Controller-scherm kan tonen.
 
 Cloudfunctie: volume-remote v9.
