@@ -202,7 +202,7 @@ class _ReceiverGateState extends State<ReceiverGate> {
                 onSubmitted: (_) => _tryUnlock(),
                 decoration: InputDecoration(
                   labelText: 'Pincode',
-                  hintText: 'â€¢â€¢â€¢â€¢',
+                  hintText: 'Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢',
                   errorText: _error.isEmpty ? null : _error,
                   border: const OutlineInputBorder(),
                 ),
@@ -410,16 +410,6 @@ class _ReceiverPageState extends State<ReceiverPage>
     }
   }
 
-  Future<void> requestBatteryOptimizationExemption() async {
-    try {
-      await native.invokeMethod('requestBatteryOptimizationExemption');
-      await Future.delayed(const Duration(milliseconds: 900));
-      await refresh();
-    } catch (e) {
-      if (mounted) setState(() => error = e.toString());
-    }
-  }
-
   Future<void> openWifiSettings() async {
     try {
       await native.invokeMethod('openWifiSettings');
@@ -545,7 +535,7 @@ class _ReceiverPageState extends State<ReceiverPage>
                   const SizedBox(height: 14),
                   Text(
                     cloudReady
-                        ? 'Cloudverbinding actief â€¢ werkt ook via mobiel internet en andere wifi.'
+                        ? 'Cloudverbinding actief Ã¢â‚¬Â¢ werkt ook via mobiel internet en andere wifi.'
                         : 'Cloudverbinding wordt gestart...',
                     textAlign: TextAlign.center,
                     style: TextStyle(
@@ -698,7 +688,7 @@ class _ReceiverPageState extends State<ReceiverPage>
                     icon: Icons.open_in_new_rounded,
                     title: 'YouTube Kids automatisch openen',
                     subtitle: kidsBackgroundAllowed
-                        ? 'Toegestaan • opent ook als Receiver op de achtergrond staat'
+                        ? 'Toegestaan â€¢ opent ook als Receiver op de achtergrond staat'
                         : 'Eenmalig toestaan via Android: over andere apps weergeven',
                     enabled: kidsBackgroundAllowed,
                     onPressed: requestKidsBackgroundPermission,
@@ -720,7 +710,7 @@ class _ReceiverPageState extends State<ReceiverPage>
                     ),
                     title: const Text('Batterijvriendelijke stand-by'),
                     subtitle: const Text(
-                      'Geen permanente wake-locks • directe Realtime-verbinding met zuinige terugvalcontrole',
+                      'Geen permanente wake-locks â€¢ directe Realtime-verbinding met zuinige terugvalcontrole',
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -785,7 +775,6 @@ class _ControllerPageState extends State<ControllerPage>
   bool lockAdminActive = false;
   bool tabletStandby = false;
   bool secureLockScreen = false;
-  bool batteryOptimizationIgnored = false;
   bool canOpenKidsInBackground = false;
   bool touchLocked = false;
   String pairingCode = '';
@@ -911,7 +900,6 @@ class _ControllerPageState extends State<ControllerPage>
       lockAdminActive = status['lockAdminActive'] == true;
       tabletStandby = status['standby'] == true;
       secureLockScreen = status['secureLockScreen'] == true;
-      batteryOptimizationIgnored = status['batteryOptimizationIgnored'] == true;
     });
   }
 
@@ -978,8 +966,6 @@ class _ControllerPageState extends State<ControllerPage>
           lockAdminActive = status['lockAdminActive'] == true;
           tabletStandby = status['standby'] == true;
           secureLockScreen = status['secureLockScreen'] == true;
-          batteryOptimizationIgnored =
-              status['batteryOptimizationIgnored'] == true;
           canOpenKidsInBackground = status['canOpenKidsInBackground'] == true;
           touchLocked = status['touchLocked'] == true;
         });
@@ -1032,7 +1018,6 @@ class _ControllerPageState extends State<ControllerPage>
         lockAdminActive = r['lockAdminActive'] == true;
         tabletStandby = r['standby'] == true;
         secureLockScreen = r['secureLockScreen'] == true;
-        batteryOptimizationIgnored = r['batteryOptimizationIgnored'] == true;
         canOpenKidsInBackground = r['canOpenKidsInBackground'] == true;
         touchLocked = r['touchLocked'] == true;
       });
@@ -1082,8 +1067,6 @@ class _ControllerPageState extends State<ControllerPage>
           lockAdminActive = status['lockAdminActive'] == true;
           tabletStandby = status['standby'] == true;
           secureLockScreen = status['secureLockScreen'] == true;
-          batteryOptimizationIgnored =
-              status['batteryOptimizationIgnored'] == true;
           canOpenKidsInBackground = status['canOpenKidsInBackground'] == true;
           touchLocked = status['touchLocked'] == true;
         });
@@ -1105,8 +1088,7 @@ class _ControllerPageState extends State<ControllerPage>
           lockAdminActive = r['lockAdminActive'] == true;
           tabletStandby = r['standby'] == true;
           secureLockScreen = r['secureLockScreen'] == true;
-          batteryOptimizationIgnored = r['batteryOptimizationIgnored'] == true;
-          canOpenKidsInBackground = r['canOpenKidsInBackground'] == true;
+            canOpenKidsInBackground = r['canOpenKidsInBackground'] == true;
           touchLocked = r['touchLocked'] == true;
         });
       } else {
@@ -1383,14 +1365,15 @@ class _ControllerPageState extends State<ControllerPage>
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Sta op de tablet eerst Volume Receiver > Toestemmingen > YouTube Kids automatisch openen toe. Deze toestemming is ook nodig voor de kijkvergrendeling.',
+            'Geef op de tablet bij Volume Receiver toestemming voor ?Weergeven over andere apps?. Dit is nodig om aanrakingen te blokkeren.',
           ),
         ),
       );
       return;
     }
 
-    final command = touchLocked ? 'screenUnlock' : 'screenLock';
+    final desired = !touchLocked;
+    final command = desired ? 'screenLock' : 'screenUnlock';
     try {
       if (cloudDeviceId != null && cloudControllerSecret != null) {
         await CloudRelay.sendCommand(
@@ -1398,25 +1381,56 @@ class _ControllerPageState extends State<ControllerPage>
           controllerSecret: cloudControllerSecret!,
           command: command,
         );
+        // A cloud send only queues the command. Wait for the Receiver to
+        // apply it and publish its actual state before changing the UI.
+        var confirmed = false;
+        for (var attempt = 0; attempt < 12; attempt++) {
+          await Future.delayed(const Duration(milliseconds: 500));
+          final response = await CloudRelay.controllerStatus(
+            deviceId: cloudDeviceId!,
+            controllerSecret: cloudControllerSecret!,
+          );
+          final status = Map<String, dynamic>.from(response['status'] ?? {});
+          if (status['touchLocked'] == desired) {
+            confirmed = true;
+            break;
+          }
+        }
+        if (!confirmed) {
+          throw Exception(
+            desired
+                ? 'De tablet heeft de vergrendeling niet bevestigd. Controleer of Volume Receiver actief is en toestemming voorWeergeven over andere apps heeft.'
+                : 'De tablet heeft het ontgrendelen niet bevestigd. Probeer opnieuw.',
+          );
+        }
       } else {
         final response = await sendCommand(ip.text.trim(), pin.text.trim(), command);
         if (response['ok'] != true) {
-          throw Exception(response['error'] ?? 'Kijkvergrendeling mislukt');
+          final reason = response['error'] ?? 'Kijkvergrendeling mislukt';
+          if (reason == 'OVERLAY_PERMISSION_REQUIRED') {
+            throw Exception('Geef Volume Receiver toestemming voor ?Weergeven over andere apps?.');
+          }
+          throw Exception(reason);
+        }
+        if (response['touchLocked'] != desired) {
+          throw Exception('De tablet heeft de wijziging niet bevestigd.');
         }
       }
       if (!mounted) return;
-      setState(() => touchLocked = !touchLocked);
+      setState(() => touchLocked = desired);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            touchLocked
-                ? 'Kijkvergrendeling aan - video blijft spelen'
+            desired
+                ? 'Kijkvergrendeling actief - aanraken is geblokkeerd'
                 : 'Kijkvergrendeling uit - bediening is weer vrij',
           ),
         ),
       );
     } catch (e) {
       if (mounted) {
+        await check();
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Kijkvergrendeling mislukt: $e')),
         );
@@ -2164,7 +2178,7 @@ class _ControllerSettingsPageState extends State<ControllerSettingsPage> {
                 obscureText: true,
                 decoration: const InputDecoration(
                   labelText: 'Zescijferige koppelcode (lokaal)',
-                  hintText: 'â€¢â€¢â€¢â€¢â€¢â€¢',
+                  hintText: 'Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢Ã¢â‚¬Â¢',
                   prefixIcon: Icon(Icons.key_rounded),
                   border: OutlineInputBorder(),
                 ),
@@ -2431,3 +2445,6 @@ class _HueWheelPainter extends CustomPainter {
   bool shouldRepaint(covariant _HueWheelPainter oldDelegate) =>
       oldDelegate.color != color;
 }
+
+
+[executed on device: PC-van-Jake (1997e53f-651c-4a6a-959d-b2acccb4b133)]
