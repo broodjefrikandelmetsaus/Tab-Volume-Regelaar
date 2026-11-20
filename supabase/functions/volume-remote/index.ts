@@ -97,7 +97,7 @@ Deno.serve(async (req: Request) => {
       const percent = body?.percent;
       const payload = body?.payload;
       const needsPercent = command === "set" || command === "setBrightness";
-      if (!["set", "setBrightness", "lock", "screenLock", "screenUnlock", "openKids", "wifi"].includes(command) ||
+      if (!["set", "setBrightness", "lock", "wake", "screenLock", "screenUnlock", "openKids", "wifi"].includes(command) ||
           (needsPercent && (!Number.isInteger(percent) || percent < 0 || percent > 100))) {
         return json({ error: "INVALID_COMMAND" }, 400);
       }
@@ -110,18 +110,13 @@ Deno.serve(async (req: Request) => {
           return json({ error: "INVALID_WIFI_DETAILS" }, 400);
         }
       }
-      const { data: recent, error: recentError } = await db.from("volume_remote_commands").select("id").eq("device_id", deviceId)
-        .gte("created_at", new Date(Date.now() - 100).toISOString()).limit(1);
-      if (recentError) throw recentError;
-      if (recent?.length) return json({ error: "COMMAND_THROTTLED" }, 429);
-
       if (command === "wifi") {
         const wifiPayload = { ssid: payload.ssid.trim(), password: payload.password };
         const { error: insertError } = await db.from("volume_remote_commands").insert({
           device_id: deviceId, action: command, percent: null, payload: wifiPayload
         });
         if (insertError) throw insertError;
-      } else if (["lock", "screenLock", "screenUnlock", "openKids"].includes(command)) {
+      } else if (["lock", "wake", "screenLock", "screenUnlock", "openKids"].includes(command)) {
         const { error: insertError } = await db.from("volume_remote_commands").insert({ device_id: deviceId, action: command, percent: null });
         if (insertError) throw insertError;
       } else {
