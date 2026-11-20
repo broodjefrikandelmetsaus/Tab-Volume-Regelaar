@@ -302,6 +302,8 @@ class _ReceiverPageState extends State<ReceiverPage>
       'standby': info['standby'] == true,
       'secureLockScreen': info['secureLockScreen'] == true,
       'batteryOptimizationIgnored': info['batteryOptimizationIgnored'] == true,
+      'canOpenKidsInBackground': info['canOpenKidsInBackground'] == true,
+      'touchLocked': info['touchLocked'] == true,
     };
   }
 
@@ -377,6 +379,16 @@ class _ReceiverPageState extends State<ReceiverPage>
           SnackBar(content: Text('YouTube Kids openen lukte niet: $e')),
         );
       }
+    }
+  }
+
+  Future<void> requestKidsBackgroundPermission() async {
+    try {
+      await native.invokeMethod('requestYouTubeKidsBackgroundPermission');
+      await Future.delayed(const Duration(milliseconds: 900));
+      await refresh();
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString());
     }
   }
 
@@ -478,6 +490,7 @@ class _ReceiverPageState extends State<ReceiverPage>
     final wifiPermissionGranted = info['wifiPermissionGranted'] == true;
     final secureLockScreen = info['secureLockScreen'] == true;
     final kidsInstalled = info['youtubeKidsInstalled'] == true;
+    final kidsBackgroundAllowed = info['canOpenKidsInBackground'] == true;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Volume Receiver')),
@@ -682,6 +695,15 @@ class _ReceiverPageState extends State<ReceiverPage>
                     onPressed: requestWifiPermission,
                   ),
                   permissionTile(
+                    icon: Icons.open_in_new_rounded,
+                    title: 'YouTube Kids automatisch openen',
+                    subtitle: kidsBackgroundAllowed
+                        ? 'Toegestaan • opent ook als Receiver op de achtergrond staat'
+                        : 'Eenmalig toestaan via Android: over andere apps weergeven',
+                    enabled: kidsBackgroundAllowed,
+                    onPressed: requestKidsBackgroundPermission,
+                  ),
+                  permissionTile(
                     icon: Icons.pattern_rounded,
                     title: 'Android-schermvergrendeling',
                     subtitle: secureLockScreen
@@ -764,6 +786,8 @@ class _ControllerPageState extends State<ControllerPage>
   bool tabletStandby = false;
   bool secureLockScreen = false;
   bool batteryOptimizationIgnored = false;
+  bool canOpenKidsInBackground = false;
+  bool touchLocked = false;
   String pairingCode = '';
   String? cloudDeviceId;
   String? cloudControllerSecret;
@@ -956,6 +980,8 @@ class _ControllerPageState extends State<ControllerPage>
           secureLockScreen = status['secureLockScreen'] == true;
           batteryOptimizationIgnored =
               status['batteryOptimizationIgnored'] == true;
+          canOpenKidsInBackground = status['canOpenKidsInBackground'] == true;
+          touchLocked = status['touchLocked'] == true;
         });
         timer?.cancel();
         timer = null;
@@ -1007,6 +1033,8 @@ class _ControllerPageState extends State<ControllerPage>
         tabletStandby = r['standby'] == true;
         secureLockScreen = r['secureLockScreen'] == true;
         batteryOptimizationIgnored = r['batteryOptimizationIgnored'] == true;
+        canOpenKidsInBackground = r['canOpenKidsInBackground'] == true;
+        touchLocked = r['touchLocked'] == true;
       });
       timer?.cancel();
       timer = Timer.periodic(const Duration(seconds: 15), (_) => check());
@@ -1056,6 +1084,8 @@ class _ControllerPageState extends State<ControllerPage>
           secureLockScreen = status['secureLockScreen'] == true;
           batteryOptimizationIgnored =
               status['batteryOptimizationIgnored'] == true;
+          canOpenKidsInBackground = status['canOpenKidsInBackground'] == true;
+          touchLocked = status['touchLocked'] == true;
         });
         return;
       }
@@ -1076,6 +1106,8 @@ class _ControllerPageState extends State<ControllerPage>
           tabletStandby = r['standby'] == true;
           secureLockScreen = r['secureLockScreen'] == true;
           batteryOptimizationIgnored = r['batteryOptimizationIgnored'] == true;
+          canOpenKidsInBackground = r['canOpenKidsInBackground'] == true;
+          touchLocked = r['touchLocked'] == true;
         });
       } else {
         setState(() => connected = false);
@@ -1296,6 +1328,16 @@ class _ControllerPageState extends State<ControllerPage>
       ).showSnackBar(const SnackBar(content: Text('Verbind eerst de tablet.')));
       return;
     }
+    if (!canOpenKidsInBackground) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Sta op de tablet eerst Volume Receiver > Toestemmingen > YouTube Kids automatisch openen toe.',
+          ),
+        ),
+      );
+      return;
+    }
     try {
       if (cloudDeviceId != null && cloudControllerSecret != null) {
         await CloudRelay.sendCommand(
@@ -1316,7 +1358,7 @@ class _ControllerPageState extends State<ControllerPage>
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'YouTube Kids-opdracht verzonden. Staat Receiver op de achtergrond, dan verschijnt een melding op de tablet om het te openen.',
+              'YouTube Kids wordt op de tablet geopend.',
             ),
           ),
         );
@@ -1325,6 +1367,58 @@ class _ControllerPageState extends State<ControllerPage>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('YouTube Kids openen lukte niet: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleTouchLock() async {
+    if (!connected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Verbind de tablet eerst.')),
+      );
+      return;
+    }
+    if (!canOpenKidsInBackground) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Sta op de tablet eerst Volume Receiver > Toestemmingen > YouTube Kids automatisch openen toe. Deze toestemming is ook nodig voor de kijkvergrendeling.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final command = touchLocked ? 'screenUnlock' : 'screenLock';
+    try {
+      if (cloudDeviceId != null && cloudControllerSecret != null) {
+        await CloudRelay.sendCommand(
+          deviceId: cloudDeviceId!,
+          controllerSecret: cloudControllerSecret!,
+          command: command,
+        );
+      } else {
+        final response = await sendCommand(ip.text.trim(), pin.text.trim(), command);
+        if (response['ok'] != true) {
+          throw Exception(response['error'] ?? 'Kijkvergrendeling mislukt');
+        }
+      }
+      if (!mounted) return;
+      setState(() => touchLocked = !touchLocked);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            touchLocked
+                ? 'Kijkvergrendeling aan - video blijft spelen'
+                : 'Kijkvergrendeling uit - bediening is weer vrij',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Kijkvergrendeling mislukt: $e')),
         );
       }
     }
@@ -1571,6 +1665,29 @@ class _ControllerPageState extends State<ControllerPage>
                         ],
                       ),
                     ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: connected ? _toggleTouchLock : null,
+                  icon: Icon(touchLocked ? Icons.lock_open_rounded : Icons.lock_rounded),
+                  label: Text(
+                    touchLocked ? 'Kijkvergrendeling uitzetten' : 'Kijkvergrendeling aanzetten',
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: touchLocked
+                        ? const Color(0xFF42D69A)
+                        : const Color(0xFFFFC66D),
+                    side: BorderSide(
+                      color: (touchLocked
+                              ? const Color(0xFF42D69A)
+                              : const Color(0xFFFFC66D))
+                          .withOpacity(.55),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
               ),
@@ -2314,5 +2431,3 @@ class _HueWheelPainter extends CustomPainter {
   bool shouldRepaint(covariant _HueWheelPainter oldDelegate) =>
       oldDelegate.color != color;
 }
-
-[executed on device: PC-van-Jake (1997e53f-651c-4a6a-959d-b2acccb4b133)]
